@@ -25,7 +25,7 @@ int main()
 	pthread_t thread_data;
 	pthread_t thread_cmd;
 //	pthread_t thread_yield;
-//	pthread_t thread_socket;
+	pthread_t thread_socket;
 //	pthread_t thread_udp_2;
 
 	pthread_create(&thread_mqtt, NULL, mqtt_main, NULL);
@@ -35,7 +35,7 @@ int main()
 	pthread_create(&thread_data, NULL, data_main, NULL);
 	pthread_create(&thread_cmd, NULL, cmd_main, NULL);
 //	pthread_create(&thread_yield, NULL, yield_main, NULL);
-//	pthread_create(&thread_socket, NULL, socket_main, NULL);
+	pthread_create(&thread_socket, NULL, socket_main, NULL);
 //	pthread_create(&thread_udp_2, NULL, udp_uart_main_2, NULL);
 
 	pthread_join(thread_mqtt, NULL);
@@ -45,7 +45,7 @@ int main()
 	pthread_join(thread_data, NULL);
 	pthread_join(thread_cmd, NULL);
 //	pthread_join(thread_yield, NULL);
-//	pthread_join(thread_socket, NULL);
+	pthread_join(thread_socket, NULL);
 //	pthread_join(thread_udp_2, NULL);
 
 	return 0;
