@@ -5,3 +5,7 @@
 # IDE settings
 /.idea/
 /.vscode/
+
+# Toolchains / bundled binaries (large)
+/toolchains/
+/bin/
