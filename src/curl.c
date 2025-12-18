@@ -139,7 +139,7 @@ void *socket_main(void *args)
 	const int unit_id = 1;  // 服务端接受任意 Unit ID，此处固定为 1 便于测试
 
 	const int start = 1;
-	const int count = 99;  // 轮询 1~99 holding registers
+	const int count = 98;  // 轮询 1~99 holding registers
 
 	uint16_t regs[100];
 	uint16_t next[100];
@@ -209,7 +209,7 @@ void *socket_main(void *args)
 			}
 
 			int n = count;
-			if (n > 3) n = 3;
+			if (n > 10) n = 10;
 			printf("[MBTCP] round=%u ok, mismatch=%d, range=HR[%d..%d], sample:",
 			       round, mismatch, start, start + count - 1);
 			for (int i = 0; i < n; i++) {
