@@ -54,6 +54,7 @@ APP_SOURCES := \
 	src/udp.c \
 	src/bfmsg.c \
 	src/modbus.c \
+	src/modbus-tcp.c \
 	src/modbus-data.c \
 	src/curl.c
 

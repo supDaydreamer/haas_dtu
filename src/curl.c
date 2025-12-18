@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <unistd.h>
 #include <curl/curl.h>
 #include "curl.h"
 
@@ -130,53 +132,96 @@ char *get_http(const char *param)
 	return buf;
 }
 
-void *socket_main()
+void *socket_main(void *args)
 {
-#if 0
-	int sockfd;
-	struct sockaddr_in server_addr;
-	unsigned char request[12];
-	unsigned char response[256];
-	int bytes_received;
-					    
-	// 创建socket
-	sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	if (sockfd < 0) {
-		printf("socket creation failed\r\n");
-		return -1;
-	}
+	const char *ip = "192.168.0.175";
+	const int port = 1502;
+	const int unit_id = 1;  // 服务端接受任意 Unit ID，此处固定为 1 便于测试
 
-	// 设置服务器地址
-	server_addr.sin_family = AF_INET;
-	server_addr.sin_port = htons(SERVER_PORT);
-	inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr);
-				    
-	// 连接到服务器
-	if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-		perror("connection failed");
-		return -1;
-	}
-	build_modbus_tcp_frame(request, TRANSACTION_ID, 0x0000, UNIT_ID, 
-							0x03, 0x0000, 0x0003); // 读取0x0000开始的3个寄存器
-	    
-	    // 发送请求
-	send(sockfd, request, 12, 0);
-		    
-		// 接收响应
-	bytes_received = recv(sockfd, response, sizeof(response), 0);
-	if (bytes_received > 0) {
-		printf("Received %d bytes of response:\n", bytes_received);
-		for (int i = 0; i < bytes_received; i++) {
-			printf("%02X ", response[i]);
+	const int start = 0;
+	const int count = 100;  // 轮询 0~99 holding registers
+
+	uint16_t regs[100];
+	uint16_t next[100];
+	uint16_t verify[100];
+
+	unsigned int round = 0;
+
+	(void)args;
+
+	for (;;) {
+		modbus_t *ctx = modbus_new_tcp(ip, port);
+		if (!ctx) {
+			printf("[MBTCP] modbus_new_tcp failed\n");
+			sleep(1);
+			continue;
 		}
-		printf("\n");
-	}
-				    
-		// 关闭连接
-	close(sockfd);
-#endif
-	while(1)
-	{
+
+		modbus_set_slave(ctx, unit_id);
+		modbus_set_response_timeout(ctx, 2, 0);
+
+		printf("[MBTCP] connecting to %s:%d (unit=%d)...\n", ip, port, unit_id);
+		if (modbus_connect(ctx) == -1) {
+			printf("[MBTCP] connect failed: %s\n", modbus_strerror(errno));
+			modbus_free(ctx);
+			sleep(1);
+			continue;
+		}
+		printf("[MBTCP] connected\n");
+
+		for (;;) {
+			round++;
+
+			int rc = modbus_read_registers(ctx, start, count, regs);
+			if (rc == -1) {
+				printf("[MBTCP] read HR[%d..%d] failed: %s\n",
+				       start, start + count - 1, modbus_strerror(errno));
+				break;
+			}
+
+			for (int i = 0; i < count; i++) {
+				next[i] = (uint16_t)(regs[i] + 1);  // 溢出回到 0（uint16_t 自然回绕）
+			}
+
+			rc = modbus_write_registers(ctx, start, count, next);
+			if (rc == -1) {
+				printf("[MBTCP] write HR[%d..%d] failed: %s\n",
+				       start, start + count - 1, modbus_strerror(errno));
+				break;
+			}
+
+			rc = modbus_read_registers(ctx, start, count, verify);
+			if (rc == -1) {
+				printf("[MBTCP] readback HR[%d..%d] failed: %s\n",
+				       start, start + count - 1, modbus_strerror(errno));
+				break;
+			}
+
+			int mismatch = 0;
+			for (int i = 0; i < count; i++) {
+				if (verify[i] != next[i]) {
+					if (mismatch < 10) {
+						printf("[MBTCP] mismatch HR[%d]: expect=%u got=%u (before=%u)\n",
+						       start + i, next[i], verify[i], regs[i]);
+					}
+					mismatch++;
+				}
+			}
+
+			printf("[MBTCP] round=%u ok, mismatch=%d, sample: HR[0]=%u->%u HR[1]=%u->%u HR[2]=%u->%u\n",
+			       round, mismatch,
+			       regs[0], verify[0],
+			       regs[1], verify[1],
+			       regs[2], verify[2]);
+
+			sleep(1);
+		}
+
+		modbus_close(ctx);
+		modbus_free(ctx);
+		printf("[MBTCP] disconnected, retry in 1s...\n");
 		sleep(1);
 	}
+
+	return NULL;
 }

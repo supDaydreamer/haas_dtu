@@ -15,6 +15,6 @@ extern unsigned int  http_req_f;
 extern ProductOder WorkOrder;
 
 char *get_http(const char *param);
-void *socket_main();
+void *socket_main(void *args);
 
 #endif
