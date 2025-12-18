@@ -1,0 +1,7 @@
+# Build outputs
+/build/
+/mk.obj/
+
+# IDE settings
+/.idea/
+/.vscode/
