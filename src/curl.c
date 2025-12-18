@@ -35,70 +35,6 @@ struct write_ctx {
 ProductOder WorkOrder;
 unsigned int http_req_f = 0;
 
-static int mbtcp_try_read_1(modbus_t *ctx, int addr, uint16_t *out)
-{
-	int rc = modbus_read_registers(ctx, addr, 1, out);
-	return (rc == 1) ? 0 : -1;
-}
-
-static int mbtcp_detect_start(modbus_t *ctx, int desired_start)
-{
-	uint16_t tmp = 0;
-
-	// 优先尝试用户期望的 start（这里默认为 0）
-	if (mbtcp_try_read_1(ctx, desired_start, &tmp) == 0) {
-		return desired_start;
-	}
-
-	// 常见的模拟器/PLC 使用 1-based 地址（0 读会报 Illegal data address）
-	if (mbtcp_try_read_1(ctx, desired_start + 1, &tmp) == 0) {
-		return desired_start + 1;
-	}
-
-	// 都不行：保持原值（上层会处理失败）
-	return desired_start;
-}
-
-static int mbtcp_detect_count(modbus_t *ctx, int start, int desired_count)
-{
-	if (desired_count <= 0) {
-		return 0;
-	}
-
-	int count = desired_count;
-	uint16_t tmp[100];
-	if (count > (int)(sizeof(tmp) / sizeof(tmp[0]))) {
-		count = (int)(sizeof(tmp) / sizeof(tmp[0]));
-	}
-
-	while (count > 0) {
-		int rc = modbus_read_registers(ctx, start, count, tmp);
-		if (rc == count) {
-			return count;
-		}
-		if (errno != EMBXILADD) {
-			// 非地址错误（如超时/断链），不在这里兜底
-			return -1;
-		}
-		count /= 2;
-	}
-	return 0;
-}
-
-static void mbtcp_print_sample(unsigned int round, int start, int count,
-                               const uint16_t *before, const uint16_t *after, int mismatch)
-{
-	int n = count;
-	if (n > 3) n = 3;
-
-	printf("[MBTCP] round=%u ok, mismatch=%d, range=HR[%d..%d], sample:",
-	       round, mismatch, start, start + count - 1);
-	for (int i = 0; i < n; i++) {
-		printf(" HR[%d]=%u->%u", start + i, before[i], after[i]);
-	}
-	printf("\n");
-}
-
 #if 0
 
 // 构建Modbus TCP请求帧
@@ -202,8 +138,8 @@ void *socket_main(void *args)
 	const int port = 1502;
 	const int unit_id = 1;  // 服务端接受任意 Unit ID，此处固定为 1 便于测试
 
-	const int desired_start = 0;
-	const int desired_count = 100;  // 期望轮询 0~99 holding registers
+	const int start = 1;
+	const int count = 99;  // 轮询 1~99 holding registers
 
 	uint16_t regs[100];
 	uint16_t next[100];
@@ -233,26 +169,6 @@ void *socket_main(void *args)
 		}
 		printf("[MBTCP] connected\n");
 
-		int start = mbtcp_detect_start(ctx, desired_start);
-		int count = mbtcp_detect_count(ctx, start, desired_count);
-		if (count <= 0) {
-			if (errno == EMBXILADD) {
-				printf("[MBTCP] no valid holding register address (try start=%d or %d)\n",
-				       desired_start, desired_start + 1);
-			} else {
-				printf("[MBTCP] detect range failed: %s\n", modbus_strerror(errno));
-			}
-			modbus_close(ctx);
-			modbus_free(ctx);
-			sleep(1);
-			continue;
-		}
-		if (start != desired_start || count != desired_count) {
-			printf("[MBTCP] detected range=HR[%d..%d] (requested HR[%d..%d])\n",
-			       start, start + count - 1,
-			       desired_start, desired_start + desired_count - 1);
-		}
-
 		for (;;) {
 			round++;
 
@@ -260,19 +176,6 @@ void *socket_main(void *args)
 			if (rc == -1) {
 				printf("[MBTCP] read HR[%d..%d] failed: %s\n",
 				       start, start + count - 1, modbus_strerror(errno));
-				// 地址错误通常是配置问题，重连无意义：尝试重新探测范围
-				if (errno == EMBXILADD) {
-					int new_start = mbtcp_detect_start(ctx, desired_start);
-					int new_count = mbtcp_detect_count(ctx, new_start, desired_count);
-					if (new_count > 0) {
-						start = new_start;
-						count = new_count;
-						printf("[MBTCP] re-detected range=HR[%d..%d]\n",
-						       start, start + count - 1);
-						sleep(1);
-						continue;
-					}
-				}
 				break;
 			}
 
@@ -282,25 +185,9 @@ void *socket_main(void *args)
 
 			rc = modbus_write_registers(ctx, start, count, next);
 			if (rc == -1) {
-				// 若服务端不支持 FC=0x10，则降级为逐个 FC=0x06
-				if (errno == EMBXILFUN) {
-					int ok = 1;
-					for (int i = 0; i < count; i++) {
-						if (modbus_write_register(ctx, start + i, next[i]) == -1) {
-							printf("[MBTCP] write1 HR[%d] failed: %s\n",
-							       start + i, modbus_strerror(errno));
-							ok = 0;
-							break;
-						}
-					}
-					if (!ok) {
-						break;
-					}
-				} else {
-					printf("[MBTCP] write HR[%d..%d] failed: %s\n",
-					       start, start + count - 1, modbus_strerror(errno));
-					break;
-				}
+				printf("[MBTCP] write HR[%d..%d] failed: %s\n",
+				       start, start + count - 1, modbus_strerror(errno));
+				break;
 			}
 
 			rc = modbus_read_registers(ctx, start, count, verify);
@@ -321,7 +208,14 @@ void *socket_main(void *args)
 				}
 			}
 
-			mbtcp_print_sample(round, start, count, regs, verify, mismatch);
+			int n = count;
+			if (n > 3) n = 3;
+			printf("[MBTCP] round=%u ok, mismatch=%d, range=HR[%d..%d], sample:",
+			       round, mismatch, start, start + count - 1);
+			for (int i = 0; i < n; i++) {
+				printf(" HR[%d]=%u->%u", start + i, regs[i], verify[i]);
+			}
+			printf("\n");
 
 			sleep(1);
 		}
