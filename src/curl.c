@@ -134,7 +134,7 @@ char *get_http(const char *param)
 
 void *socket_main(void *args)
 {
-	const char *ip = "192.168.0.175";
+	const char *ip = "192.168.5.150";
 	const int port = 1502;
 	const int unit_id = 1;  // 服务端接受任意 Unit ID，此处固定为 1 便于测试
 
