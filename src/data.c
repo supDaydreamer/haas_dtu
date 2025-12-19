@@ -1995,18 +1995,61 @@ void http_data_get(void)
 	char *workOrder = WorkOrder.WorkOrder_No;
 	printf("workorder is:%s\r\n",workOrder);
 	char *res = get_http(workOrder);
+	if (res != NULL) {
+		printf("http raw json:%s\r\n", res);
+	} else {
+		printf("http raw json is NULL\r\n");
+	}
 //	printf("%s\n", res);
 	cJSON *data_json = read_json_str(res);
 //	cJSON *data_json = cJSON_GetObjectItemCaseSensitive(res, "data");
 	if (data_json != NULL) {
 		cJSON *dataobject_json = cJSON_GetObjectItemCaseSensitive(data_json, "data");
 		cJSON *name_json = cJSON_GetObjectItemCaseSensitive(dataobject_json, "Craft_Name");
-	//	printf("read data json:%s\n", data_json);
 		cJSON *quantity_json = cJSON_GetObjectItemCaseSensitive(dataobject_json, "AssignProduct_Quantity");
-		WorkOrder.quantity = quantity_json->valueint;
-		sprintf(WorkOrder.Product_name,"%s",name_json->valuestring);
-		//WorkOrder.Product_name = name_json->valuestring;
-	//	int pd_quantity = 45;
+		cJSON *order_name_json = cJSON_GetObjectItemCaseSensitive(dataobject_json, "Assign_Name");
+		cJSON *operator_json = cJSON_GetObjectItemCaseSensitive(dataobject_json, "Create_User");
+		cJSON *unit_json = cJSON_GetObjectItemCaseSensitive(dataobject_json, "UnitNick");
+		const char *unit_str = (unit_json && cJSON_IsString(unit_json)) ? unit_json->valuestring : "";
+		double total_quantity = 0.0;
+		if (quantity_json && cJSON_IsNumber(quantity_json)) {
+			total_quantity = quantity_json->valuedouble;
+			WorkOrder.quantity = (unsigned int)total_quantity;
+		} else {
+			WorkOrder.quantity = 0;
+		}
+
+		if (name_json && cJSON_IsString(name_json)) {
+			sprintf(WorkOrder.Product_name,"%s",name_json->valuestring);
+		} else {
+			WorkOrder.Product_name[0] = '\0';
+		}
+
+		printf("assign info: order=%s, operator=%s, craft=%s, total=%.4f %s\r\n",
+		       (order_name_json && cJSON_IsString(order_name_json)) ? order_name_json->valuestring : "",
+		       (operator_json && cJSON_IsString(operator_json)) ? operator_json->valuestring : "",
+		       WorkOrder.Product_name,
+		       total_quantity,
+		       unit_str);
+
+		cJSON *details_json = cJSON_GetObjectItemCaseSensitive(dataobject_json, "Details");
+		if (details_json && cJSON_IsArray(details_json)) {
+			int detail_size = cJSON_GetArraySize(details_json);
+			for (int i = 0; i < detail_size; ++i) {
+				cJSON *item = cJSON_GetArrayItem(details_json, i);
+				if (!item) {
+					continue;
+				}
+				cJSON *material_name_json = cJSON_GetObjectItemCaseSensitive(item, "Material_Name");
+				cJSON *entry_quantity_json = cJSON_GetObjectItemCaseSensitive(item, "AssignEntry_Quantity");
+				cJSON *entry_unit_json = cJSON_GetObjectItemCaseSensitive(item, "MaterialUnit");
+				const char *material_name = (material_name_json && cJSON_IsString(material_name_json)) ? material_name_json->valuestring : "";
+				const char *entry_unit = (entry_unit_json && cJSON_IsString(entry_unit_json)) ? entry_unit_json->valuestring : unit_str;
+				double entry_quantity = (entry_quantity_json && cJSON_IsNumber(entry_quantity_json)) ? entry_quantity_json->valuedouble : 0.0;
+				printf("material[%d]: %s target=%.4f %s\r\n", i, material_name, entry_quantity, entry_unit);
+			}
+		}
+
 		work_quantity[3] = WorkOrder.quantity << 8;
 		work_quantity[4] = WorkOrder.quantity;
 		send_data_p = work_quantity;
