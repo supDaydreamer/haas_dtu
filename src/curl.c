@@ -138,8 +138,8 @@ void *socket_main(void *args)
 	const int port = 1502;
 	const int unit_id = 1;  // 服务端接受任意 Unit ID，此处固定为 1 便于测试
 
-	const int start = 1;
-	const int count = 98;  // 轮询 1~99 holding registers
+	const int start = 0;
+	const int count = 1;  // 轮询 holding registers
 
 	uint16_t regs[100];
 	uint16_t next[100];
