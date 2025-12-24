@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <curl/curl.h>
 #include "curl.h"
+#include "ini.h"
+#include "data.h"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -15,6 +17,8 @@
 #define HTTP_BUF_SIZE (128 * 1024)
 #define URL_BUF_SIZE  128
 
+#define DEFAULT_MBTCP_IP   "192.168.5.150"
+#define DEFAULT_MBTCP_PORT 1502
 
 //#define SERVER_IP "192.168.1.100"  // 服务器IP
 //#define SERVER_PORT 502            // Modbus TCP默认端口
@@ -34,6 +38,31 @@ struct write_ctx {
 
 ProductOder WorkOrder;
 unsigned int http_req_f = 0;
+
+static void load_mbtcp_config(char *ip_buf, size_t ip_buf_size, int *port_out)
+{
+	const char *cfg_ip = NULL;
+	int cfg_port = 0;
+
+	if (!ip_buf || ip_buf_size == 0 || !port_out) {
+		return;
+	}
+
+	cfg_port = GetIniKeyInt("mbtcp", "port", FILENAME);
+	cfg_ip = GetIniKeyString("mbtcp", "ip", FILENAME);
+
+	if (cfg_ip && cfg_ip[0] != '\0' && strcmp(cfg_ip, "0") != 0) {
+		snprintf(ip_buf, ip_buf_size, "%s", cfg_ip);
+	} else {
+		snprintf(ip_buf, ip_buf_size, "%s", DEFAULT_MBTCP_IP);
+	}
+
+	if (cfg_port > 0 && cfg_port <= 65535) {
+		*port_out = cfg_port;
+	} else {
+		*port_out = DEFAULT_MBTCP_PORT;
+	}
+}
 
 #if 0
 
@@ -134,8 +163,8 @@ char *get_http(const char *param)
 
 void *socket_main(void *args)
 {
-	const char *ip = "192.168.5.150";
-	const int port = 1502;
+	char ip[64] = {0};
+	int port = 0;
 	const int unit_id = 1;  // 服务端接受任意 Unit ID，此处固定为 1 便于测试
 
 	const int start = 0;
@@ -150,6 +179,7 @@ void *socket_main(void *args)
 	(void)args;
 
 	for (;;) {
+		load_mbtcp_config(ip, sizeof(ip), &port);
 		modbus_t *ctx = modbus_new_tcp(ip, port);
 		if (!ctx) {
 			printf("[MBTCP] modbus_new_tcp failed\n");

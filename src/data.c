@@ -2000,6 +2000,11 @@ void http_data_get(void)
 	} else {
 		printf("http raw json is NULL\r\n");
 	}
+	WorkOrder.material_count = 0;
+	WorkOrder.assign_name[0] = '\0';
+	WorkOrder.operator_id[0] = '\0';
+	WorkOrder.unit[0] = '\0';
+	WorkOrder.quantity_double = 0.0;
 //	printf("%s\n", res);
 	cJSON *data_json = read_json_str(res);
 //	cJSON *data_json = cJSON_GetObjectItemCaseSensitive(res, "data");
@@ -2015,6 +2020,7 @@ void http_data_get(void)
 		if (quantity_json && cJSON_IsNumber(quantity_json)) {
 			total_quantity = quantity_json->valuedouble;
 			WorkOrder.quantity = (unsigned int)total_quantity;
+			WorkOrder.quantity_double = total_quantity;
 		} else {
 			WorkOrder.quantity = 0;
 		}
@@ -2023,6 +2029,15 @@ void http_data_get(void)
 			sprintf(WorkOrder.Product_name,"%s",name_json->valuestring);
 		} else {
 			WorkOrder.Product_name[0] = '\0';
+		}
+		if (order_name_json && cJSON_IsString(order_name_json)) {
+			snprintf(WorkOrder.assign_name, sizeof(WorkOrder.assign_name), "%s", order_name_json->valuestring);
+		}
+		if (operator_json && cJSON_IsString(operator_json)) {
+			snprintf(WorkOrder.operator_id, sizeof(WorkOrder.operator_id), "%s", operator_json->valuestring);
+		}
+		if (unit_str[0] != '\0') {
+			snprintf(WorkOrder.unit, sizeof(WorkOrder.unit), "%s", unit_str);
 		}
 
 		printf("assign info: order=%s, operator=%s, craft=%s, total=%.4f %s\r\n",
@@ -2036,6 +2051,9 @@ void http_data_get(void)
 		if (details_json && cJSON_IsArray(details_json)) {
 			int detail_size = cJSON_GetArraySize(details_json);
 			for (int i = 0; i < detail_size; ++i) {
+				if (WorkOrder.material_count >= 10) {
+					break;
+				}
 				cJSON *item = cJSON_GetArrayItem(details_json, i);
 				if (!item) {
 					continue;
@@ -2047,6 +2065,14 @@ void http_data_get(void)
 				const char *entry_unit = (entry_unit_json && cJSON_IsString(entry_unit_json)) ? entry_unit_json->valuestring : unit_str;
 				double entry_quantity = (entry_quantity_json && cJSON_IsNumber(entry_quantity_json)) ? entry_quantity_json->valuedouble : 0.0;
 				printf("material[%d]: %s target=%.4f %s\r\n", i, material_name, entry_quantity, entry_unit);
+				snprintf(WorkOrder.materials[WorkOrder.material_count].name,
+				         sizeof(WorkOrder.materials[WorkOrder.material_count].name),
+				         "%s", material_name);
+				snprintf(WorkOrder.materials[WorkOrder.material_count].unit,
+				         sizeof(WorkOrder.materials[WorkOrder.material_count].unit),
+				         "%s", entry_unit);
+				WorkOrder.materials[WorkOrder.material_count].target = entry_quantity;
+				WorkOrder.material_count++;
 			}
 		}
 

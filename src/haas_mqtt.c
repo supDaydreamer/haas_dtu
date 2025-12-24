@@ -89,7 +89,7 @@ static int on_message(void *context, char *topicName, int topicLen, MQTTAsync_me
 					device_control_cmd(heat_control_val,light_control_val);
 				}
 
-				// haas_device_control ������֧�� haas_device_ctrl ������ֱ��ƽ�̣�Ҳ֧�ֶ��ŷָ��ַ���
+				// haas_device_control ½âÎö£¬Ö§³Ö haas_device_ctrl °ü¹ü»òÖ±½ÓÆ½ÆÌ£¬Ò²Ö§³Ö¶ººÅ·Ö¸ô×Ö·û´®
 				bool handled = false;
 				if (haas_ctrl_json && cJSON_IsString(haas_ctrl_json) && haas_ctrl_json->valuestring) {
 					const char *p = haas_ctrl_json->valuestring;
@@ -430,7 +430,7 @@ void *haas_mqtt_main(void)
 void haas_mqtt_data_upload(void)
 {
 	char s_payload[UART_DATA_BUF_SIZE];
-	char s_data[500];
+	char s_data[2048];
 	char s_topic_buf[MQTT_TOPIC_LEN_MAX] = {0};
 	snprintf(s_topic_buf, sizeof(s_topic_buf), "/%d/%s/property/post",product_ID,g_bf_code);
 
@@ -473,7 +473,65 @@ for(int i =0;i<haas_device_num;i++)
 	}
 	len += len1;
 }
-sprintf(s_data + len - 3,"}");
+if (len >= 3) {
+	len -= 3;  // 去掉最后一个字段后的 ",\r\n"
+	if (len < (int)sizeof(s_data)) {
+		s_data[len] = '\0';
+	}
+}
+
+	/* 追加工单解析字段 */
+	if (WorkOrder.assign_name[0] != '\0') {
+		len += snprintf(s_data + len, sizeof(s_data) - len,
+		                "%s\"PN\": \"%s\"", (len > 1) ? ",\r\n\t" : "\r\n\t", WorkOrder.assign_name);
+	}
+	if (WorkOrder.Product_name[0] != '\0') {
+		len += snprintf(s_data + len, sizeof(s_data) - len,
+		                ",\r\n\t\"RN\": \"%s\"", WorkOrder.Product_name);
+	}
+	if (WorkOrder.quantity_double > 0.0) {
+		char lw_buf[32];
+		if (WorkOrder.unit[0] != '\0') {
+			snprintf(lw_buf, sizeof(lw_buf), "%.4f %s",
+			         WorkOrder.quantity_double, WorkOrder.unit);
+		} else {
+			snprintf(lw_buf, sizeof(lw_buf), "%.4f", WorkOrder.quantity_double);
+		}
+		len += snprintf(s_data + len, sizeof(s_data) - len,
+		                ",\r\n\t\"LW\": \"%s\"", lw_buf);
+	}
+	if (WorkOrder.operator_id[0] != '\0') {
+		len += snprintf(s_data + len, sizeof(s_data) - len,
+		                ",\r\n\t\"Operator\": \"%s\"", WorkOrder.operator_id);
+	}
+
+	for (int i = 0; i < WorkOrder.material_count && i < 10; ++i) {
+		char key_rmc[8];
+		char key_tw[8];
+		snprintf(key_rmc, sizeof(key_rmc), "RMC%02d", i + 1);
+		snprintf(key_tw, sizeof(key_tw), "TW%02d", i + 1);
+		len += snprintf(s_data + len, sizeof(s_data) - len,
+		                ",\r\n\t\"%s\": \"%s\"", key_rmc, WorkOrder.materials[i].name);
+
+		char tw_buf[48];
+		const char *tw_unit = NULL;
+		if (WorkOrder.materials[i].unit[0] != '\0') {
+			tw_unit = WorkOrder.materials[i].unit;
+		} else if (WorkOrder.unit[0] != '\0') {
+			tw_unit = WorkOrder.unit;
+		}
+		if (tw_unit) {
+			snprintf(tw_buf, sizeof(tw_buf), "%.4f %s",
+			         WorkOrder.materials[i].target, tw_unit);
+		} else {
+			snprintf(tw_buf, sizeof(tw_buf), "%.4f",
+			         WorkOrder.materials[i].target);
+		}
+		len += snprintf(s_data + len, sizeof(s_data) - len,
+		                ",\r\n\t\"%s\": \"%s\"", key_tw, tw_buf);
+	}
+
+len += snprintf(s_data + len, sizeof(s_data) - len, "\r\n}");
 
 printf("mqtt_data_upload topic:%s\r\n",s_topic_buf);
 //      out_publish_msg(s_topic_buf, s_payload);

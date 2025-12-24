@@ -7,6 +7,16 @@ typedef struct{
 	char WorkOrder_No[20];
 	char Product_name[25];
 	unsigned int quantity;
+	double quantity_double;
+	char assign_name[32];
+	char operator_id[64];
+	char unit[12];
+	int material_count;
+	struct {
+		char name[32];
+		double target;
+		char unit[12];
+	} materials[10];
 }ProductOder;
 
 extern unsigned int  http_req_f;
