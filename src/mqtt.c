@@ -507,7 +507,7 @@ void mqtt_haas_data_publish()
 void mqtt_data_upload(void)
 {
 	char s_payload[UART_DATA_BUF_SIZE];
-	char s_data[500];
+	char s_data[16384];
 	char s_topic_buf[MQTT_TOPIC_LEN_MAX] = {0};
 	snprintf(s_topic_buf, sizeof(s_topic_buf), "/iotdevice/dtu_status/upload/%s", g_bf_code);
 
@@ -525,6 +525,9 @@ len +=1;
 for(int i =0;i<haas_device_num;i++)
 {
 	HAAS_DEV_RS485 *dev = &g_haas_dev_rs485[i];
+	if (len >= (int)sizeof(s_data) - 16) {
+		break;
+	}
 	if(i<9)
 	{
 		if (dev->is_string) {
@@ -548,9 +551,19 @@ for(int i =0;i<haas_device_num;i++)
 	if (len1 < 0) {
 		len1 = 0;
 	}
+	if (len + len1 >= (int)sizeof(s_data)) {
+		len1 = 0;
+		break;
+	}
 	len += len1;
 }
-sprintf(s_data + len - 3,"}");
+if (len >= 3) {
+	len -= 3;
+	if (len < (int)sizeof(s_data)) {
+		s_data[len] = '\0';
+	}
+}
+sprintf(s_data + len,"}");
 
 printf("mqtt_data_upload topic:%s\r\n",s_topic_buf);
 //      out_publish_msg(s_topic_buf, s_payload);

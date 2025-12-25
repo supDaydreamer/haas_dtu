@@ -779,20 +779,23 @@ void *cmd_main(void *args)
 	while (1) {
 		get_Tywifi_status();
 		time_t now_time = time(NULL);
+		int modbus_tcp_enable = GetIniKeyInt("config", "modbus_tcp_enable", FILENAME);
 		if (RS485_type == 1) {
-		// 监测模式：只监听总线
-		haas_data_detect();
-		sleep(1);
+			// 被动监测：只监听总线
+			haas_data_detect();
+			sleep(1);
 		} else {
-		// 主从模式及未知值：默认读取温湿度；当 dev_type=2 时进入能耗采集
-		if (dev_type == 2) {
-			haas_energy_type2_init();
-			haas_energy_type2_poll();
-		} else {
-		haas_data_read();
-		sleep(2);																																	//haas_switch_device_smoke_once();
-																																		}
-																}
+			// 主动发包（互斥优先级）：Modbus TCP -> 能耗采集 -> RTU
+			if (modbus_tcp_enable == 1) {
+				sleep(1);
+			} else if (dev_type == 2) {
+				haas_energy_type2_init();
+				haas_energy_type2_poll();
+			} else {
+				haas_data_read();
+				sleep(2);																																	//haas_switch_device_smoke_once();
+			}
+		}
 	//	if(RS485_type == 0)
 //		{
 //			haas_data_read();
@@ -807,7 +810,7 @@ void *cmd_main(void *args)
 		DATA_FUNCTION_INTERVAL_S = GetIniKeyInt("config", "upload_time", FILENAME);
 		printf("upload data interval:%d\r\n",DATA_FUNCTION_INTERVAL_S);
 		if (now_time - s_cmd_last_run_time >= DATA_FUNCTION_INTERVAL_S){
-			haas_data_upload();
+			// haas_data_debug_print();
 		s_cmd_last_run_time = now_time;
 		}
 	//	if (now_time - s_humi_last_save_time >= HUMI_SAVE_INTERVAL_S){

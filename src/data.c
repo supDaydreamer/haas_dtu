@@ -19,7 +19,7 @@
 DEVICE_485_type g_485_device_type = DEVICE_485_NO_DEVICE;
 int dev_type = 0;
 
-HAAS_DEV_RS485 g_haas_dev_rs485[50];
+HAAS_DEV_RS485 g_haas_dev_rs485[100];
 uint8_t haas_device_num = 0;
 uint8_t device_no = 0;
 time_t s_haas_data_send_time = 0;
@@ -596,42 +596,39 @@ void on_uart_2_read(uint8_t *data, size_t len)
 	uart_rx_publish(2, store_buf(data, len));
 
 	extern uint8_t RS485_type;
-	if (RS485_type == 1 || RS485_type == 2) {
-		if (RS485_type == 1) {
-			/* 如果收到目标序列的前10字节，则发送指定响应 10 次，每次间隔 50ms
-			 * 触发序列（前10字节）：03 10 00 00 00 06 0C 4D 4F 32
-			 * 响应帧（9字节）：06 03 04 00 09 30 31 89 25
-			 */
-			static const uint8_t _trigger_prefix[10] = {
-				0x03, 0x10, 0x00, 0x00, 0x00, 0x06, 0x0C, 0x4D, 0x4F, 0x32
-			};
-			static const uint8_t _response_frame[9] = {
-				0x06, 0x03, 0x04, 0x00, 0x14, 0x30, 0x31,0x19,0x23
-			};
 
-			if (len >= 10 && memcmp(data, _trigger_prefix, 10) == 0) {
-				/* 发送10次响应，每次间隔50ms */
-				for (int _i = 0; _i < 10; ++_i) {
-					uart_tx(1, (uint8_t*)_response_frame, sizeof(_response_frame));
-					/* 使用 usleep 以毫秒为单位等待 50ms */
-					usleep(50 * 1000);
-				}
-				/* 匹配后仍继续后续处理（不提前返回） */
+	// 打印 UART2 收到的数据
+	dbg_printf("======= uart 2 read %u: ======\n", (unsigned int)len);
+	for (size_t i = 0; i < len; i++) {
+		dbg_printf("%02X ", data[i]);
+	}
+	dbg_printf("\n=======------------------=========\n");
+
+	if (RS485_type == 1) {
+		/* 如果收到目标序列的前10字节，则发送指定响应 10 次，每次间隔 50ms
+		 * 触发序列（前10字节）：03 10 00 00 00 06 0C 4D 4F 32
+		 * 响应帧（9字节）：06 03 04 00 09 30 31 89 25
+		 */
+		static const uint8_t _trigger_prefix[10] = {
+			0x03, 0x10, 0x00, 0x00, 0x00, 0x06, 0x0C, 0x4D, 0x4F, 0x32
+		};
+		static const uint8_t _response_frame[9] = {
+			0x06, 0x03, 0x04, 0x00, 0x14, 0x30, 0x31,0x19,0x23
+		};
+
+		if (len >= 10 && memcmp(data, _trigger_prefix, 10) == 0) {
+			/* 发送10次响应，每次间隔50ms */
+			for (int _i = 0; _i < 10; ++_i) {
+				uart_tx(1, (uint8_t*)_response_frame, sizeof(_response_frame));
+				/* 使用 usleep 以毫秒为单位等待 50ms */
+				usleep(50 * 1000);
 			}
 		}
-
 		process_modbus_sniffer_data(data, len);
-		//dbg_printf("[ModbusUART2" );
+		return;
 	}
-	else if (len == uartReceive_length) {
-		dbg_printf("======= uart 2 read 13: ======\n");
-		for (size_t i = 0; i < len; i++) {
-			dbg_printf("%02X ", data[i]);
-		}
-		dbg_printf("\n=======------------------=========\n");
 
-	//	energy_process(data, len);
-	}
+
 	haas_device_dataRead(data);
 
 	//humi_process(data, len);
@@ -1029,6 +1026,39 @@ static void ensure_register_map_initialized(void)
 	dbg_printf("[Modbus Monitor] Register map ready\n");
 }
 
+void haas_register_map_prepare(void)
+{
+	ensure_register_map_initialized();
+}
+
+void haas_store_register_values(uint8_t slave_addr, uint16_t reg_addr, uint8_t cmd,
+                                const uint16_t *values, uint16_t count)
+{
+	if (!values || count == 0) {
+		return;
+	}
+
+	ensure_register_map_initialized();
+
+	for (uint16_t i = 0; i < count; i++) {
+		store_register_data(slave_addr, reg_addr + i, values[i], cmd);
+	}
+}
+
+void haas_store_bit_values(uint8_t slave_addr, uint16_t reg_addr, uint8_t cmd,
+                           const uint8_t *bits, uint16_t count)
+{
+	if (!bits || count == 0) {
+		return;
+	}
+
+	ensure_register_map_initialized();
+
+	for (uint16_t i = 0; i < count; i++) {
+		store_register_data(slave_addr, reg_addr + i, (uint16_t)(bits[i] ? 1 : 0), cmd);
+	}
+}
+
 /**
  * @brief 添加寄存器映射（用于运行时动态添加）
  */
@@ -1187,6 +1217,18 @@ static void store_register_data(uint8_t slave_addr, uint16_t reg_addr, uint16_t 
 	RegisterData *slot = &g_register_data[map_index];
 	uint16_t effective_len = clamp_data_len(map->data_len);
 
+	if ((cmd == 0x01 || cmd == 0x02) && map->data_type != 0) {
+		if (map_index < (int)(sizeof(g_haas_dev_rs485) / sizeof(g_haas_dev_rs485[0]))) {
+			HAAS_DEV_RS485 *dev = &g_haas_dev_rs485[map_index];
+			dev->value1 = 0;
+			dev->value2 = 0.0f;
+			dev->value_numeric = 0.0;
+			dev->value_text[0] = '\0';
+			dev->is_string = 0;
+		}
+		return;
+	}
+
 	if (offset >= effective_len || offset >= (REGISTER_VALUE_MAX_BYTES / 2)) {
 		dbg_printf("[Modbus Store] Ignore: Addr:%02X Reg:%04X offset:%u exceeds range Len:%u (slot %d)\n",
 		           slave_addr, reg_addr, offset, effective_len, map_index);
@@ -1223,6 +1265,9 @@ static void store_register_data(uint8_t slave_addr, uint16_t reg_addr, uint16_t 
 		           map->name, slot->text_value, offset, cmd, map_index);
 	} else if (map->data_type == 3 && aggregated) {
 		dbg_printf("[Modbus Store] %s Value(signed32)=%s offset:%u cmd:0x%02X (slot %d)\n",
+		           map->name, slot->text_value, offset, cmd, map_index);
+	} else if (map->data_type == 4 && aggregated) {
+		dbg_printf("[Modbus Store] %s Value(float32)=%s offset:%u cmd:0x%02X (slot %d)\n",
 		           map->name, slot->text_value, offset, cmd, map_index);
 	} else if (aggregated) {
 		dbg_printf("[Modbus Store] %s Value:%s offset:%u cmd:0x%02X (slot %d)\n",
@@ -1313,6 +1358,19 @@ static bool recalc_register_outputs(RegisterData *slot)
 			slot->numeric_value = (double)raw;
 			snprintf(slot->text_value, sizeof(slot->text_value), "%u", raw);
 		}
+		return true;
+	}
+
+	// 32 位浮点数（IEEE754，高字在前）
+	if (slot->data_type == 4) {
+		if (contiguous < 2) {
+			return false;
+		}
+		uint32_t raw = ((uint32_t)slot->reg_values[0] << 16) | slot->reg_values[1];
+		float f = 0.0f;
+		memcpy(&f, &raw, sizeof(f));
+		slot->numeric_value = (double)f;
+		snprintf(slot->text_value, sizeof(slot->text_value), "%g", slot->numeric_value);
 		return true;
 	}
 
@@ -1790,7 +1848,7 @@ void haas_data_display_cmd(void)
 	 }
 }
 
-void haas_data_upload(void)
+void haas_data_debug_print(void)
 {
 	uint8_t *send_data_p = NULL;
 	size_t send_data_len = 0;
@@ -2113,7 +2171,11 @@ void *data_main()
 		}
 		time_t now_time = time(NULL);
 
-		if(now_time - s_mqtt_dataUpload_time >= DATA_MQTT_INTERVAL_S)
+		int upload_time = GetIniKeyInt("config", "upload_time", FILENAME);
+		if (upload_time <= 0) {
+			upload_time = DATA_MQTT_INTERVAL_S;
+		}
+		if(now_time - s_mqtt_dataUpload_time >= upload_time)
 		{
 			mqtt_data_upload();
 			haas_mqtt_data_upload();

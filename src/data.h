@@ -260,7 +260,7 @@ typedef struct __bt_notify_data
 
 extern DEVICE_485_type g_485_device_type;
 extern int dev_type;
-extern HAAS_DEV_RS485 g_haas_dev_rs485[50];
+extern HAAS_DEV_RS485 g_haas_dev_rs485[100];
 
 extern uint8_t haas_device_num;
 extern uint8_t device_no;
@@ -298,7 +298,7 @@ void on_haas_time_receive(HAAS_TIME haas_time);
 void energy_init();
 void energy_read();
 void haas_data_read();
-void haas_data_upload();
+void haas_data_debug_print();
 void haas_data_detect();
 void haas_energy_type2_init(void);
 void haas_energy_type2_poll(void);
@@ -315,6 +315,11 @@ void humi_device_control(uint8_t cmd);
 void air_device_control(uint8_t cmd);
 void haas_device_control(uint8_t device_type, uint8_t slave_addr, uint16_t reg_addr,
                          uint16_t data, uint32_t uartx);
+void haas_register_map_prepare(void);
+void haas_store_register_values(uint8_t slave_addr, uint16_t reg_addr, uint8_t cmd,
+                                const uint16_t *values, uint16_t count);
+void haas_store_bit_values(uint8_t slave_addr, uint16_t reg_addr, uint8_t cmd,
+                           const uint8_t *bits, uint16_t count);
 
 uint16_t ModbusCrc(uint8_t *data,uint16_t count);
 ///////////////////////////////////////////////////////////////////////////////////////////////

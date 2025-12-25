@@ -15,6 +15,7 @@
 
 #include <unistd.h>
 #include <string.h>
+#include <stdlib.h>
 #include "MQTTAsync.h"
 
 
@@ -164,7 +165,7 @@ static void on_disconnect(void *context, char *cause)
 	} else {
 		printf("[PAHO] on_disconnect(): UNKNOWN\n");
 	}
-	exit(-1);
+	// exit(-1);
 	do_mqtt_connect(client, 3);
 }
 
@@ -371,6 +372,9 @@ void *haas_mqtt_main(void)
     //strcpy(build_id,GetIniKeyString("config","build_id",FILENAME));
 	RS485_type = GetIniKeyInt("config", "RS485_type", FILENAME);
 	haas_device_num = GetIniKeyInt("config", "haas_dev_num", FILENAME);
+	if (haas_device_num > (sizeof(g_haas_dev_rs485) / sizeof(g_haas_dev_rs485[0]))) {
+		haas_device_num = (sizeof(g_haas_dev_rs485) / sizeof(g_haas_dev_rs485[0]));
+	}
 	g_haas_dev_rs485[1].dev_add = GetIniKeyInt("dev02", "dev_add", FILENAME);
 
 	printf("num 2 add is: %d\r\n",g_haas_dev_rs485[1].dev_add);
@@ -430,7 +434,7 @@ void *haas_mqtt_main(void)
 void haas_mqtt_data_upload(void)
 {
 	char s_payload[UART_DATA_BUF_SIZE];
-	char s_data[2048];
+	char s_data[16384];
 	char s_topic_buf[MQTT_TOPIC_LEN_MAX] = {0};
 	snprintf(s_topic_buf, sizeof(s_topic_buf), "/%d/%s/property/post",product_ID,g_bf_code);
 
@@ -445,13 +449,16 @@ int len = 0;
 int len1 = 0;
 sprintf(s_data,"{");
 len +=1;
-for(int i =0;i<haas_device_num;i++)
-{
-	HAAS_DEV_RS485 *dev = &g_haas_dev_rs485[i];
-	if(i<9)
+	for(int i =0;i<haas_device_num;i++)
 	{
-		if (dev->is_string) {
-			len1 = snprintf(s_data + len, sizeof(s_data) - len,
+		HAAS_DEV_RS485 *dev = &g_haas_dev_rs485[i];
+		if (len >= (int)sizeof(s_data) - 16) {
+			break;
+		}
+		if(i<9)
+		{
+			if (dev->is_string) {
+				len1 = snprintf(s_data + len, sizeof(s_data) - len,
 			                "\t\"V0%d\": \"%s\",\r\n", i + 1, dev->value_text);
 		} else {
 			len1 = snprintf(s_data + len, sizeof(s_data) - len,
@@ -470,6 +477,10 @@ for(int i =0;i<haas_device_num;i++)
 	}
 	if (len1 < 0) {
 		len1 = 0;
+	}
+	if (len + len1 >= (int)sizeof(s_data)) {
+		len1 = 0;
+		break;
 	}
 	len += len1;
 }

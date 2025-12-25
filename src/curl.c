@@ -165,21 +165,13 @@ void *socket_main(void *args)
 {
 	char ip[64] = {0};
 	int port = 0;
-	const int unit_id = 1;  // 服务端接受任意 Unit ID，此处固定为 1 便于测试
-
-	const int start = 0;
-	const int count = 1;  // 轮询 holding registers
-
-	uint16_t regs[100];
-	uint16_t next[100];
-	uint16_t verify[100];
-
-	unsigned int round = 0;
 
 	(void)args;
 
+	load_mbtcp_config(ip, sizeof(ip), &port);
+	haas_register_map_prepare();
+
 	for (;;) {
-		load_mbtcp_config(ip, sizeof(ip), &port);
 		modbus_t *ctx = modbus_new_tcp(ip, port);
 		if (!ctx) {
 			printf("[MBTCP] modbus_new_tcp failed\n");
@@ -187,10 +179,9 @@ void *socket_main(void *args)
 			continue;
 		}
 
-		modbus_set_slave(ctx, unit_id);
 		modbus_set_response_timeout(ctx, 2, 0);
 
-		printf("[MBTCP] connecting to %s:%d (unit=%d)...\n", ip, port, unit_id);
+		printf("[MBTCP] connecting to %s:%d...\n", ip, port);
 		if (modbus_connect(ctx) == -1) {
 			printf("[MBTCP] connect failed: %s\n", modbus_strerror(errno));
 			modbus_free(ctx);
@@ -200,54 +191,17 @@ void *socket_main(void *args)
 		printf("[MBTCP] connected\n");
 
 		for (;;) {
-			round++;
-
-			int rc = modbus_read_registers(ctx, start, count, regs);
-			if (rc == -1) {
-				printf("[MBTCP] read HR[%d..%d] failed: %s\n",
-				       start, start + count - 1, modbus_strerror(errno));
+			if (haas_data_read_tcp(ctx) != 0) {
 				break;
 			}
-
-			for (int i = 0; i < count; i++) {
-				next[i] = (uint16_t)(regs[i] + 1);  // 溢出回到 0（uint16_t 自然回绕）
-			}
-
-			rc = modbus_write_registers(ctx, start, count, next);
-			if (rc == -1) {
-				printf("[MBTCP] write HR[%d..%d] failed: %s\n",
-				       start, start + count - 1, modbus_strerror(errno));
-				break;
-			}
-
-			rc = modbus_read_registers(ctx, start, count, verify);
-			if (rc == -1) {
-				printf("[MBTCP] readback HR[%d..%d] failed: %s\n",
-				       start, start + count - 1, modbus_strerror(errno));
-				break;
-			}
-
-			int mismatch = 0;
-			for (int i = 0; i < count; i++) {
-				if (verify[i] != next[i]) {
-					if (mismatch < 10) {
-						printf("[MBTCP] mismatch HR[%d]: expect=%u got=%u (before=%u)\n",
-						       start + i, next[i], verify[i], regs[i]);
-					}
-					mismatch++;
+			{
+				int upload_time = GetIniKeyInt("config", "upload_time", FILENAME);
+				int interval = (upload_time / 2) - 1;
+				if (interval < 1) {
+					interval = 10;
 				}
+				sleep(interval);
 			}
-
-			int n = count;
-			if (n > 10) n = 10;
-			printf("[MBTCP] round=%u ok, mismatch=%d, range=HR[%d..%d], sample:",
-			       round, mismatch, start, start + count - 1);
-			for (int i = 0; i < n; i++) {
-				printf(" HR[%d]=%u->%u", start + i, regs[i], verify[i]);
-			}
-			printf("\n");
-
-			sleep(1);
 		}
 
 		modbus_close(ctx);
@@ -257,4 +211,80 @@ void *socket_main(void *args)
 	}
 
 	return NULL;
+}
+
+int haas_data_read_tcp(void *ctx)
+{
+	modbus_t *mb = (modbus_t *)ctx;
+
+	if (!mb) {
+		return -1;
+	}
+
+	haas_register_map_prepare();
+
+	for (int i = 0; i < g_register_map_count; i++) {
+		RegisterMap *map = &g_register_map[i];
+		uint16_t reg_buf[REGISTER_VALUE_MAX_BYTES / 2];
+		uint8_t bit_buf[REGISTER_VALUE_MAX_BYTES];
+
+		if (!map->enabled) {
+			continue;
+		}
+
+		modbus_set_slave(mb, map->slave_addr);
+
+		switch (map->cmd) {
+		case 0x03: {
+			int rc = modbus_read_registers(mb, map->reg_addr, map->data_len, reg_buf);
+			if (rc < 0) {
+				printf("[MBTCP] read HR failed: dev=0x%02X reg=0x%04X len=%u err=%s\n",
+				       map->slave_addr, map->reg_addr, map->data_len, modbus_strerror(errno));
+				return -1;
+			}
+			haas_store_register_values(map->slave_addr, map->reg_addr, map->cmd,
+			                           reg_buf, (uint16_t)rc);
+			break;
+		}
+		case 0x04: {
+			int rc = modbus_read_input_registers(mb, map->reg_addr, map->data_len, reg_buf);
+			if (rc < 0) {
+				printf("[MBTCP] read IR failed: dev=0x%02X reg=0x%04X len=%u err=%s\n",
+				       map->slave_addr, map->reg_addr, map->data_len, modbus_strerror(errno));
+				return -1;
+			}
+			haas_store_register_values(map->slave_addr, map->reg_addr, map->cmd,
+			                           reg_buf, (uint16_t)rc);
+			break;
+		}
+		case 0x01: {
+			int rc = modbus_read_bits(mb, map->reg_addr, map->data_len, bit_buf);
+			if (rc < 0) {
+				printf("[MBTCP] read Coils failed: dev=0x%02X reg=0x%04X len=%u err=%s\n",
+				       map->slave_addr, map->reg_addr, map->data_len, modbus_strerror(errno));
+				return -1;
+			}
+			haas_store_bit_values(map->slave_addr, map->reg_addr, map->cmd,
+			                      bit_buf, (uint16_t)rc);
+			break;
+		}
+		case 0x02: {
+			int rc = modbus_read_input_bits(mb, map->reg_addr, map->data_len, bit_buf);
+			if (rc < 0) {
+				printf("[MBTCP] read Discrete failed: dev=0x%02X reg=0x%04X len=%u err=%s\n",
+				       map->slave_addr, map->reg_addr, map->data_len, modbus_strerror(errno));
+				return -1;
+			}
+			haas_store_bit_values(map->slave_addr, map->reg_addr, map->cmd,
+			                      bit_buf, (uint16_t)rc);
+			break;
+		}
+		default:
+			printf("[MBTCP] skip unsupported cmd=0x%02X dev=0x%02X reg=0x%04X\n",
+			       map->cmd, map->slave_addr, map->reg_addr);
+			break;
+		}
+	}
+
+	return 0;
 }

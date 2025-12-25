@@ -541,7 +541,7 @@ void mqtt_haas_data_publish()
 void mqtt_data_upload(void)
 {
 	char s_payload[UART_DATA_BUF_SIZE];
-	char s_data[500];
+	char s_data[16384];
 	char s_topic_buf[MQTT_TOPIC_LEN_MAX] = {0};
 	snprintf(s_topic_buf, sizeof(s_topic_buf), "/%d/%s/property/post",product_ID,g_bf_code);
 	// snprintf(s_payload, sizeof(s_payload), "{\r\n\
@@ -556,6 +556,9 @@ len +=1;
 for(int i =0;i<haas_device_num;i++)
 {
 	HAAS_DEV_RS485 *dev = &g_haas_dev_rs485[i];
+	if (len >= (int)sizeof(s_data) - 16) {
+		break;
+	}
 	if(i<9)
 	{
 		if (dev->is_string) {
@@ -578,6 +581,10 @@ for(int i =0;i<haas_device_num;i++)
 	}
 	if (len1 < 0) {
 		len1 = 0;
+	}
+	if (len + len1 >= (int)sizeof(s_data)) {
+		len1 = 0;
+		break;
 	}
 	len += len1;
 }
@@ -652,8 +659,11 @@ void *haas_mqtt_main(void)
 	 uint16_t data_len;
 	 } HAAS_DEV_RS485;
 */
-    //strcpy(build_id,GetIniKeyString("config","build_id",FILENAME));
+	//strcpy(build_id,GetIniKeyString("config","build_id",FILENAME));
 	haas_device_num = GetIniKeyInt("config", "haas_dev_num", FILENAME);
+	if (haas_device_num > (sizeof(g_haas_dev_rs485) / sizeof(g_haas_dev_rs485[0]))) {
+		haas_device_num = (sizeof(g_haas_dev_rs485) / sizeof(g_haas_dev_rs485[0]));
+	}
 	g_haas_dev_rs485[1].dev_add = GetIniKeyInt("dev02", "dev_add", FILENAME);
 
 	printf("num 2 add is: %d\r\n",g_haas_dev_rs485[1].dev_add);

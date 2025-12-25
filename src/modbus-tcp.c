@@ -25,6 +25,9 @@
 #endif
 #include <signal.h>
 #include <sys/types.h>
+#ifndef _MSC_VER
+#include <fcntl.h>
+#endif
 
 #if defined(_WIN32)
 # define OS_WIN32
@@ -661,11 +664,14 @@ int modbus_tcp_accept(modbus_t *ctx, int *s)
     }
 
     addrlen = sizeof(addr);
-#ifdef HAVE_ACCEPT4
-    /* Inherit socket flags and use accept4 call */
-    ctx->s = accept4(*s, (struct sockaddr *)&addr, &addrlen, SOCK_CLOEXEC);
-#else
     ctx->s = accept(*s, (struct sockaddr *)&addr, &addrlen);
+#ifndef _MSC_VER
+    if (ctx->s != -1) {
+        int flags = fcntl(ctx->s, F_GETFD);
+        if (flags != -1) {
+            fcntl(ctx->s, F_SETFD, flags | FD_CLOEXEC);
+        }
+    }
 #endif
 
     if (ctx->s == -1) {
@@ -693,11 +699,14 @@ int modbus_tcp_pi_accept(modbus_t *ctx, int *s)
     }
 
     addrlen = sizeof(addr);
-#ifdef HAVE_ACCEPT4
-    /* Inherit socket flags and use accept4 call */
-    ctx->s = accept4(*s, (struct sockaddr *)&addr, &addrlen, SOCK_CLOEXEC);
-#else
     ctx->s = accept(*s, (struct sockaddr *)&addr, &addrlen);
+#ifndef _MSC_VER
+    if (ctx->s != -1) {
+        int flags = fcntl(ctx->s, F_GETFD);
+        if (flags != -1) {
+            fcntl(ctx->s, F_SETFD, flags | FD_CLOEXEC);
+        }
+    }
 #endif
     if (ctx->s == -1) {
         close(*s);

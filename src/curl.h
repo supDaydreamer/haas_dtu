@@ -26,5 +26,6 @@ extern ProductOder WorkOrder;
 
 char *get_http(const char *param);
 void *socket_main(void *args);
+int haas_data_read_tcp(void *ctx);
 
 #endif
