@@ -38,6 +38,60 @@ char g_topic_buf[MQTT_TOPIC_LEN_MAX] = {0};
 
 static Network n;
 static MQTTClient c;
+
+static void append_vision_upload_fields(char *buf, int buf_len, int *len)
+{
+	int count = vision_get_upload_count();
+	int n = 0;
+
+	if (count <= 0 || !buf || !len) {
+		return;
+	}
+
+	n = snprintf(buf + *len, buf_len - *len, "\t\"NUM\": %d,\r\n", count);
+	if (n < 0 || n >= buf_len - *len) {
+		return;
+	}
+	*len += n;
+
+	n = snprintf(buf + *len, buf_len - *len, "\t\"VL\": [");
+	if (n < 0 || n >= buf_len - *len) {
+		return;
+	}
+	*len += n;
+	for (int i = 0; i < count; ++i) {
+		n = snprintf(buf + *len, buf_len - *len, "%s%.4f",
+		             (i == 0) ? "" : ", ", vision_get_upload_length(i));
+		if (n < 0 || n >= buf_len - *len) {
+			return;
+		}
+		*len += n;
+	}
+	n = snprintf(buf + *len, buf_len - *len, "],\r\n");
+	if (n < 0 || n >= buf_len - *len) {
+		return;
+	}
+	*len += n;
+
+	n = snprintf(buf + *len, buf_len - *len, "\t\"VW\": [");
+	if (n < 0 || n >= buf_len - *len) {
+		return;
+	}
+	*len += n;
+	for (int i = 0; i < count; ++i) {
+		n = snprintf(buf + *len, buf_len - *len, "%s%.4f",
+		             (i == 0) ? "" : ", ", vision_get_upload_width(i));
+		if (n < 0 || n >= buf_len - *len) {
+			return;
+		}
+		*len += n;
+	}
+	n = snprintf(buf + *len, buf_len - *len, "],\r\n");
+	if (n < 0 || n >= buf_len - *len) {
+		return;
+	}
+	*len += n;
+}
 static MQTTMessage pubmsg;
 
 
@@ -557,6 +611,7 @@ for(int i =0;i<haas_device_num;i++)
 	}
 	len += len1;
 }
+	append_vision_upload_fields(s_data, sizeof(s_data), &len);
 if (len >= 3) {
 	len -= 3;
 	if (len < (int)sizeof(s_data)) {

@@ -332,6 +332,15 @@ void print_all_register_data(void);
 void clear_register_data(void);
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
+void vision_store_sample(float length, float width);
+void vision_check_timeout(void);
+bool vision_is_upload_pending(void);
+int vision_prepare_upload_snapshot(void);
+void vision_clear_upload_snapshot(void);
+int vision_get_upload_count(void);
+float vision_get_upload_length(int index);
+float vision_get_upload_width(int index);
+
 
 #endif
 

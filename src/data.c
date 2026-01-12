@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include "common.h"
 #include "data.h"
 #include "uart.h"
@@ -72,6 +73,45 @@ static const EnergyInitFrame k_energy_init_frames[] = {
 static bool s_energy_type2_init_done = false;
 static const useconds_t k_type2_poll_interval_us = 1000 * 1000;  // 1s
 
+#define VISION_MAX_SAMPLES 64
+
+typedef struct {
+	float lengths[VISION_MAX_SAMPLES];
+	float widths[VISION_MAX_SAMPLES];
+	int count;
+	time_t first_ts;
+} VisionSampleBuffer;
+
+typedef struct {
+	float lengths[VISION_MAX_SAMPLES];
+	float widths[VISION_MAX_SAMPLES];
+	int count;
+} VisionUploadSnapshot;
+
+static VisionSampleBuffer g_vision_buf = {0};
+static VisionUploadSnapshot g_vision_upload = {0};
+static pthread_mutex_t g_vision_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_vision_upload_pending = 0;
+
+static void load_vision_upload_config(int *count_out, int *interval_out)
+{
+	int count = 0;
+	int interval = 0;
+
+	count = GetIniKeyInt("mbtcp", "vision_upload_count", FILENAME);
+	interval = GetIniKeyInt("mbtcp", "vision_upload_interval", FILENAME);
+
+	if (count <= 0) {
+		count = 20;
+	}
+	if (interval <= 0) {
+		interval = 10;
+	}
+
+	*count_out = count;
+	*interval_out = interval;
+}
+
 // Modbus监测函数前向声明
 static bool check_modbus_crc(uint8_t *data, size_t len);
 static bool parse_modbus_request(uint8_t *data, size_t len, ModbusRequest *req);
@@ -87,6 +127,121 @@ static uint16_t clamp_data_len(uint16_t requested_len);
 static bool recalc_register_outputs(RegisterData *slot);
 static void sync_register_to_rs485(int index, RegisterData *slot, const RegisterMap *map,
                                    bool aggregated, uint16_t last_word);
+
+void vision_store_sample(float length, float width)
+{
+	int count_threshold = 0;
+	int interval_sec = 0;
+	time_t now = time(NULL);
+
+	load_vision_upload_config(&count_threshold, &interval_sec);
+	(void)interval_sec;
+
+	pthread_mutex_lock(&g_vision_lock);
+
+	if (g_vision_buf.count == 0) {
+		g_vision_buf.first_ts = now;
+	}
+
+	if (g_vision_buf.count >= VISION_MAX_SAMPLES) {
+		memmove(g_vision_buf.lengths, g_vision_buf.lengths + 1,
+		        sizeof(float) * (VISION_MAX_SAMPLES - 1));
+		memmove(g_vision_buf.widths, g_vision_buf.widths + 1,
+		        sizeof(float) * (VISION_MAX_SAMPLES - 1));
+		g_vision_buf.count = VISION_MAX_SAMPLES - 1;
+		g_vision_buf.first_ts = now;
+	}
+
+	g_vision_buf.lengths[g_vision_buf.count] = length;
+	g_vision_buf.widths[g_vision_buf.count] = width;
+	g_vision_buf.count++;
+
+	if (g_vision_buf.count >= count_threshold) {
+		g_vision_upload_pending = 1;
+	}
+
+	pthread_mutex_unlock(&g_vision_lock);
+}
+
+void vision_check_timeout(void)
+{
+	int count_threshold = 0;
+	int interval_sec = 0;
+	time_t now = time(NULL);
+
+	load_vision_upload_config(&count_threshold, &interval_sec);
+	(void)count_threshold;
+
+	pthread_mutex_lock(&g_vision_lock);
+	if (g_vision_buf.count > 0 && interval_sec > 0) {
+		if (now - g_vision_buf.first_ts >= interval_sec) {
+			g_vision_upload_pending = 1;
+		}
+	}
+	pthread_mutex_unlock(&g_vision_lock);
+}
+
+bool vision_is_upload_pending(void)
+{
+	bool pending = false;
+
+	pthread_mutex_lock(&g_vision_lock);
+	pending = (g_vision_upload_pending != 0);
+	pthread_mutex_unlock(&g_vision_lock);
+
+	return pending;
+}
+
+int vision_prepare_upload_snapshot(void)
+{
+	int count = 0;
+
+	pthread_mutex_lock(&g_vision_lock);
+	if (g_vision_upload_pending && g_vision_buf.count > 0) {
+		count = g_vision_buf.count;
+		if (count > VISION_MAX_SAMPLES) {
+			count = VISION_MAX_SAMPLES;
+		}
+		memcpy(g_vision_upload.lengths, g_vision_buf.lengths, sizeof(float) * count);
+		memcpy(g_vision_upload.widths, g_vision_buf.widths, sizeof(float) * count);
+		g_vision_upload.count = count;
+		g_vision_buf.count = 0;
+		g_vision_buf.first_ts = 0;
+		g_vision_upload_pending = 0;
+	} else {
+		g_vision_upload.count = 0;
+		g_vision_upload_pending = 0;
+	}
+	pthread_mutex_unlock(&g_vision_lock);
+
+	return count;
+}
+
+void vision_clear_upload_snapshot(void)
+{
+	g_vision_upload.count = 0;
+}
+
+int vision_get_upload_count(void)
+{
+	return g_vision_upload.count;
+}
+
+float vision_get_upload_length(int index)
+{
+	if (index < 0 || index >= g_vision_upload.count) {
+		return 0.0f;
+	}
+	return g_vision_upload.lengths[index];
+}
+
+float vision_get_upload_width(int index)
+{
+	if (index < 0 || index >= g_vision_upload.count) {
+		return 0.0f;
+	}
+	return g_vision_upload.widths[index];
+}
 void haas_energy_type2_init(void)
 {
 	if (s_energy_type2_init_done) {
@@ -2170,6 +2325,15 @@ void *data_main()
 			http_data_get();
 		}
 		time_t now_time = time(NULL);
+		vision_check_timeout();
+		if (vision_is_upload_pending()) {
+			if (vision_prepare_upload_snapshot() > 0) {
+				mqtt_data_upload();
+				haas_mqtt_data_upload();
+				s_mqtt_dataUpload_time = now_time;
+				vision_clear_upload_snapshot();
+			}
+		}
 
 		int upload_time = GetIniKeyInt("config", "upload_time", FILENAME);
 		if (upload_time <= 0) {

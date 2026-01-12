@@ -64,6 +64,17 @@ static void load_mbtcp_config(char *ip_buf, size_t ip_buf_size, int *port_out)
 	}
 }
 
+static int load_mbtcp_poll_interval(void)
+{
+	int interval = GetIniKeyInt("mbtcp", "mbtcp_poll_interval", FILENAME);
+
+	if (interval <= 0) {
+		interval = 5;
+	}
+
+	return interval;
+}
+
 #if 0
 
 // 构建Modbus TCP请求帧
@@ -195,11 +206,7 @@ void *socket_main(void *args)
 				break;
 			}
 			{
-				int upload_time = GetIniKeyInt("config", "upload_time", FILENAME);
-				int interval = (upload_time / 2) - 1;
-				if (interval < 1) {
-					interval = 10;
-				}
+				int interval = load_mbtcp_poll_interval();
 				sleep(interval);
 			}
 		}

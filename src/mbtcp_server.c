@@ -15,7 +15,8 @@
 #define DEFAULT_MBTCP_SERVER_IP   "0.0.0.0"
 #define DEFAULT_MBTCP_SERVER_ENABLE 0
 #define MBTCP_SERVER_MAX_REGISTERS 200
-#define MBTCP_SERVER_UNIT_ID 1
+#define VISION_REG_START 500
+#define VISION_REG_COUNT 4
 
 static void load_mbtcp_server_config(char *ip_buf, size_t ip_buf_size,
                                      int *port_out, int *enable_out)
@@ -73,6 +74,95 @@ static void log_client_connected(int sock)
 	}
 }
 
+static float regs_to_float(uint16_t high, uint16_t low)
+{
+	union {
+		uint32_t u;
+		float f;
+	} conv;
+
+	conv.u = ((uint32_t)high << 16) | low;
+	return conv.f;
+}
+
+static int send_write_response(modbus_t *ctx, const uint8_t *req, uint16_t start, uint16_t count)
+{
+	uint8_t rsp[12];
+	int sock = modbus_get_socket(ctx);
+	int rc = 0;
+
+	rsp[0] = req[0];
+	rsp[1] = req[1];
+	rsp[2] = req[2];
+	rsp[3] = req[3];
+	rsp[4] = 0x00;
+	rsp[5] = 0x06;
+	rsp[6] = req[6];
+	rsp[7] = req[7];
+	rsp[8] = (uint8_t)(start >> 8);
+	rsp[9] = (uint8_t)(start & 0xFF);
+	rsp[10] = (uint8_t)(count >> 8);
+	rsp[11] = (uint8_t)(count & 0xFF);
+
+	printf("[MBTCP-S] TX:");
+	for (int i = 0; i < (int)sizeof(rsp); i++) {
+		printf(" %02X", rsp[i]);
+	}
+	printf("\n");
+
+	rc = send(sock, rsp, sizeof(rsp), 0);
+	return rc;
+}
+
+static int handle_vision_write(modbus_t *ctx, const uint8_t *req, int req_len)
+{
+	int offset = modbus_get_header_length(ctx);
+	uint16_t start = 0;
+	uint16_t count = 0;
+	uint8_t byte_count = 0;
+	const uint8_t *payload = NULL;
+	uint16_t reg0 = 0;
+	uint16_t reg1 = 0;
+	uint16_t reg2 = 0;
+	uint16_t reg3 = 0;
+	float length = 0.0f;
+	float width = 0.0f;
+
+	if (req_len < offset + 6) {
+		return modbus_reply_exception(ctx, req, MODBUS_EXCEPTION_ILLEGAL_DATA_VALUE);
+	}
+
+	start = (uint16_t)((req[offset + 1] << 8) | req[offset + 2]);
+	count = (uint16_t)((req[offset + 3] << 8) | req[offset + 4]);
+	byte_count = req[offset + 5];
+
+	if (count == 0 || byte_count != count * 2) {
+		return modbus_reply_exception(ctx, req, MODBUS_EXCEPTION_ILLEGAL_DATA_VALUE);
+	}
+
+	if (start != VISION_REG_START || count != VISION_REG_COUNT) {
+		return modbus_reply_exception(ctx, req, MODBUS_EXCEPTION_ILLEGAL_DATA_ADDRESS);
+	}
+
+	if (req_len < offset + 6 + byte_count) {
+		return modbus_reply_exception(ctx, req, MODBUS_EXCEPTION_ILLEGAL_DATA_VALUE);
+	}
+
+	payload = req + offset + 6;
+	reg0 = (uint16_t)((payload[0] << 8) | payload[1]);
+	reg1 = (uint16_t)((payload[2] << 8) | payload[3]);
+	reg2 = (uint16_t)((payload[4] << 8) | payload[5]);
+	reg3 = (uint16_t)((payload[6] << 8) | payload[7]);
+
+	length = regs_to_float(reg0, reg1);
+	width = regs_to_float(reg2, reg3);
+
+	printf("[MBTCP-S] Vision write length=%.4f width=%.4f\n", length, width);
+	vision_store_sample(length, width);
+
+	return send_write_response(ctx, req, start, count);
+}
+
 void *mbtcp_server_main(void *args)
 {
 	char ip[64] = {0};
@@ -96,7 +186,7 @@ void *mbtcp_server_main(void *args)
 		return NULL;
 	}
 
-	modbus_set_slave(ctx, MBTCP_SERVER_UNIT_ID);
+	modbus_set_slave(ctx, MODBUS_TCP_SLAVE);
 
 	mb_map = modbus_mapping_new(0, 0, MBTCP_SERVER_MAX_REGISTERS, 0);
 	if (!mb_map) {
@@ -115,7 +205,7 @@ void *mbtcp_server_main(void *args)
 		return NULL;
 	}
 
-	printf("[MBTCP-S] listening on %s:%d unit=%d\n", ip, port, MBTCP_SERVER_UNIT_ID);
+	printf("[MBTCP-S] listening on %s:%d unit=any\n", ip, port);
 
 	for (;;) {
 		uint8_t query[MODBUS_TCP_MAX_ADU_LENGTH];
@@ -138,11 +228,21 @@ void *mbtcp_server_main(void *args)
 			int rc = modbus_receive(ctx, query);
 			if (rc > 0) {
 				int offset = modbus_get_header_length(ctx);
-				if (query[offset] != MODBUS_FC_READ_HOLDING_REGISTERS) {
-					modbus_reply_exception(ctx, query, MODBUS_EXCEPTION_ILLEGAL_FUNCTION);
-					continue;
+				uint8_t function = query[offset];
+
+				printf("[MBTCP-S] RX:");
+				for (int i = 0; i < rc; i++) {
+					printf(" %02X", query[i]);
 				}
-				modbus_reply(ctx, query, rc, mb_map);
+				printf("\n");
+
+				if (function == MODBUS_FC_READ_HOLDING_REGISTERS) {
+					modbus_reply(ctx, query, rc, mb_map);
+				} else if (function == MODBUS_FC_WRITE_MULTIPLE_REGISTERS) {
+					handle_vision_write(ctx, query, rc);
+				} else {
+					modbus_reply_exception(ctx, query, MODBUS_EXCEPTION_ILLEGAL_FUNCTION);
+				}
 			} else {
 				break;
 			}

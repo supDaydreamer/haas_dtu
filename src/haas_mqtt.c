@@ -39,6 +39,61 @@ static char s_device_control_topic_buf[MQTT_TOPIC_LEN_MAX] = {0};
 
 static MQTTAsync s_mqtt_client;
 
+static void append_vision_upload_fields(char *buf, int buf_len, int *len)
+{
+	int count = vision_get_upload_count();
+	int n = 0;
+
+	if (count <= 0 || !buf || !len) {
+		return;
+	}
+
+	n = snprintf(buf + *len, buf_len - *len, "%s\"NUM\": %d",
+	             (*len > 1) ? ",\r\n\t" : "\r\n\t", count);
+	if (n < 0 || n >= buf_len - *len) {
+		return;
+	}
+	*len += n;
+
+	n = snprintf(buf + *len, buf_len - *len, ",\r\n\t\"VL\": [");
+	if (n < 0 || n >= buf_len - *len) {
+		return;
+	}
+	*len += n;
+	for (int i = 0; i < count; ++i) {
+		n = snprintf(buf + *len, buf_len - *len, "%s%.4f",
+		             (i == 0) ? "" : ", ", vision_get_upload_length(i));
+		if (n < 0 || n >= buf_len - *len) {
+			return;
+		}
+		*len += n;
+	}
+	n = snprintf(buf + *len, buf_len - *len, "]");
+	if (n < 0 || n >= buf_len - *len) {
+		return;
+	}
+	*len += n;
+
+	n = snprintf(buf + *len, buf_len - *len, ",\r\n\t\"VW\": [");
+	if (n < 0 || n >= buf_len - *len) {
+		return;
+	}
+	*len += n;
+	for (int i = 0; i < count; ++i) {
+		n = snprintf(buf + *len, buf_len - *len, "%s%.4f",
+		             (i == 0) ? "" : ", ", vision_get_upload_width(i));
+		if (n < 0 || n >= buf_len - *len) {
+			return;
+		}
+		*len += n;
+	}
+	n = snprintf(buf + *len, buf_len - *len, "]");
+	if (n < 0 || n >= buf_len - *len) {
+		return;
+	}
+	*len += n;
+}
+
 
 static int do_mqtt_connect(MQTTAsync client, unsigned int wait_time);
 static int do_mqtt_subscribe(MQTTAsync client, unsigned int wait_time);
@@ -541,6 +596,8 @@ if (len >= 3) {
 		len += snprintf(s_data + len, sizeof(s_data) - len,
 		                ",\r\n\t\"%s\": \"%s\"", key_tw, tw_buf);
 	}
+
+	append_vision_upload_fields(s_data, sizeof(s_data), &len);
 
 len += snprintf(s_data + len, sizeof(s_data) - len, "\r\n}");
 
