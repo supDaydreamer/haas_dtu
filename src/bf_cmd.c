@@ -792,7 +792,7 @@ void *cmd_main(void *args)
 				haas_energy_type2_init();
 				haas_energy_type2_poll();
 			} else {
-				haas_data_read();
+				//haas_data_read();
 				sleep(2);																																	//haas_switch_device_smoke_once();
 			}
 		}

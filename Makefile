@@ -1,5 +1,8 @@
 VERSION_CODE	:= 0.9.6
-CROSS			:= mipsel-openwrt-linux-
+SDK_ROOT		:= /home/zzzhy/OpenWrt-SDK-15.05.1-ramips-mt7688_gcc-4.8-linaro_uClibc-0.9.33.2.Linux-x86_64
+TOOLCHAIN_DIR	:= $(SDK_ROOT)/staging_dir/toolchain-mipsel_24kec+dsp_gcc-4.8-linaro_uClibc-0.9.33.2
+TARGET_DIR		:= $(SDK_ROOT)/staging_dir/target-mipsel_24kec+dsp_uClibc-0.9.33.2
+CROSS			:= $(TOOLCHAIN_DIR)/bin/mipsel-openwrt-linux-
 BUILD_PATH		:= build
 VERSION_FILE	:= version
 APP_NAME		:= haas_dtu
@@ -33,7 +36,7 @@ APP_CFLAGS := \
 	-Wno-unused-but-set-variable \
 	-D MQTTCLIENT_PLATFORM_HEADER=MQTTLinux.h \
 	-D BF_VERSION=\"v$(VERSION_CODE)\"
-LDFLAGS := -lz -lcurl -ldl -lpthread -llfds711 \
+LDFLAGS := -L $(TARGET_DIR)/usr/lib -Wl,-rpath-link,$(TARGET_DIR)/usr/lib -lz -lcurl -l:libmbedtls.so.9 -ldl -lpthread -llfds711 \
 	$(NEW_PAHO_LIB) \
 	-L ../liblfds/liblfds7.1.1/liblfds711/bin
 
@@ -101,6 +104,7 @@ INCLUDE_BASE := $(PAHO_INCLUDE) \
 	$(NEW_PAHO_INCLUDE) \
 	-I src/lib \
 	-I src/mcu_sdk \
+	-I $(TARGET_DIR)/usr/include \
 	-I ../liblfds/liblfds7.1.1/liblfds711/inc
 
 .PHONY: all clean_obj clean

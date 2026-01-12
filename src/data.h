@@ -330,6 +330,7 @@ RegisterData* get_register_data(uint8_t slave_addr, uint16_t reg_addr, uint8_t c
 RegisterData* get_register_data_by_index(int index);  // access by config order (0=dev01, 1=dev02, ...)
 void print_all_register_data(void);
 void clear_register_data(void);
+bool modbus_slave_sim_handle(uint8_t *data, size_t len);
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
 
