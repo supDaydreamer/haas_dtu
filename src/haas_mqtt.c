@@ -61,7 +61,7 @@ static void append_vision_upload_fields(char *buf, int buf_len, int *len)
 	}
 	*len += n;
 	for (int i = 0; i < count; ++i) {
-		n = snprintf(buf + *len, buf_len - *len, "%s%.4f",
+		n = snprintf(buf + *len, buf_len - *len, "%s%.6f",
 		             (i == 0) ? "" : ", ", vision_get_upload_length(i));
 		if (n < 0 || n >= buf_len - *len) {
 			return;
@@ -80,7 +80,7 @@ static void append_vision_upload_fields(char *buf, int buf_len, int *len)
 	}
 	*len += n;
 	for (int i = 0; i < count; ++i) {
-		n = snprintf(buf + *len, buf_len - *len, "%s%.4f",
+		n = snprintf(buf + *len, buf_len - *len, "%s%.6f",
 		             (i == 0) ? "" : ", ", vision_get_upload_width(i));
 		if (n < 0 || n >= buf_len - *len) {
 			return;

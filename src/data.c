@@ -1529,6 +1529,19 @@ static bool recalc_register_outputs(RegisterData *slot)
 		return true;
 	}
 
+	// 32 位浮点数（IEEE754，低字在前）
+	if (slot->data_type == 6) {
+		if (contiguous < 2) {
+			return false;
+		}
+		uint32_t raw = ((uint32_t)slot->reg_values[1] << 16) | slot->reg_values[0];
+		float f = 0.0f;
+		memcpy(&f, &raw, sizeof(f));
+		slot->numeric_value = (double)f;
+		snprintf(slot->text_value, sizeof(slot->text_value), "%g", slot->numeric_value);
+		return true;
+	}
+
 	uint16_t raw16 = slot->reg_values[0];
 	slot->numeric_value = (double)raw16;
 	snprintf(slot->text_value, sizeof(slot->text_value), "%u", raw16);

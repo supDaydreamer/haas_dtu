@@ -14,9 +14,11 @@
 #define DEFAULT_MBTCP_SERVER_PORT 502
 #define DEFAULT_MBTCP_SERVER_IP   "0.0.0.0"
 #define DEFAULT_MBTCP_SERVER_ENABLE 0
-#define MBTCP_SERVER_MAX_REGISTERS 200
+#define MBTCP_SERVER_MAX_REGISTERS 600
 #define VISION_REG_START 500
 #define VISION_REG_COUNT 4
+
+static modbus_mapping_t *g_mbtcp_map = NULL;
 
 static void load_mbtcp_server_config(char *ip_buf, size_t ip_buf_size,
                                      int *port_out, int *enable_out)
@@ -58,6 +60,12 @@ static void init_fixed_registers(modbus_mapping_t *mb_map)
 
 	for (i = 0; i < 10 && i < MBTCP_SERVER_MAX_REGISTERS; i++) {
 		mb_map->tab_registers[i] = (uint16_t)(i + 1);
+	}
+
+	if ((VISION_REG_START + VISION_REG_COUNT) <= MBTCP_SERVER_MAX_REGISTERS) {
+		for (i = 0; i < VISION_REG_COUNT; i++) {
+			mb_map->tab_registers[VISION_REG_START + i] = 0;
+		}
 	}
 }
 
@@ -127,6 +135,8 @@ static int handle_vision_write(modbus_t *ctx, const uint8_t *req, int req_len)
 	uint16_t reg3 = 0;
 	float length = 0.0f;
 	float width = 0.0f;
+	int wrote_length = 0;
+	int wrote_width = 0;
 
 	if (req_len < offset + 6) {
 		return modbus_reply_exception(ctx, req, MODBUS_EXCEPTION_ILLEGAL_DATA_VALUE);
@@ -140,7 +150,9 @@ static int handle_vision_write(modbus_t *ctx, const uint8_t *req, int req_len)
 		return modbus_reply_exception(ctx, req, MODBUS_EXCEPTION_ILLEGAL_DATA_VALUE);
 	}
 
-	if (start != VISION_REG_START || count != VISION_REG_COUNT) {
+	if (!((start == VISION_REG_START && count == VISION_REG_COUNT) ||
+	      (start == VISION_REG_START && count == 2) ||
+	      (start == (VISION_REG_START + 2) && count == 2))) {
 		return modbus_reply_exception(ctx, req, MODBUS_EXCEPTION_ILLEGAL_DATA_ADDRESS);
 	}
 
@@ -149,16 +161,43 @@ static int handle_vision_write(modbus_t *ctx, const uint8_t *req, int req_len)
 	}
 
 	payload = req + offset + 6;
-	reg0 = (uint16_t)((payload[0] << 8) | payload[1]);
-	reg1 = (uint16_t)((payload[2] << 8) | payload[3]);
-	reg2 = (uint16_t)((payload[4] << 8) | payload[5]);
-	reg3 = (uint16_t)((payload[6] << 8) | payload[7]);
 
-	length = regs_to_float(reg0, reg1);
-	width = regs_to_float(reg2, reg3);
+	if (count == VISION_REG_COUNT) {
+		reg0 = (uint16_t)((payload[0] << 8) | payload[1]);
+		reg1 = (uint16_t)((payload[2] << 8) | payload[3]);
+		reg2 = (uint16_t)((payload[4] << 8) | payload[5]);
+		reg3 = (uint16_t)((payload[6] << 8) | payload[7]);
+		wrote_length = 1;
+		wrote_width = 1;
+	} else if (start == VISION_REG_START) {
+		reg0 = (uint16_t)((payload[0] << 8) | payload[1]);
+		reg1 = (uint16_t)((payload[2] << 8) | payload[3]);
+		wrote_length = 1;
+	} else {
+		reg2 = (uint16_t)((payload[0] << 8) | payload[1]);
+		reg3 = (uint16_t)((payload[2] << 8) | payload[3]);
+		wrote_width = 1;
+	}
 
-	printf("[MBTCP-S] Vision write length=%.4f width=%.4f\n", length, width);
-	vision_store_sample(length, width);
+	if (g_mbtcp_map && g_mbtcp_map->tab_registers &&
+	    (start + count) <= g_mbtcp_map->nb_registers) {
+		for (int i = 0; i < count; i++) {
+			uint16_t reg = (uint16_t)((payload[i * 2] << 8) | payload[i * 2 + 1]);
+			g_mbtcp_map->tab_registers[start + i] = reg;
+		}
+	}
+
+	if (wrote_length) {
+		length = regs_to_float(reg0, reg1);
+		printf("[MBTCP-S] Vision write length=%.6f\n", length);
+	}
+	if (wrote_width) {
+		width = regs_to_float(reg2, reg3);
+		printf("[MBTCP-S] Vision write width=%.6f\n", width);
+	}
+	if (wrote_length && wrote_width) {
+		vision_store_sample(length, width);
+	}
 
 	return send_write_response(ctx, req, start, count);
 }
@@ -196,6 +235,7 @@ void *mbtcp_server_main(void *args)
 	}
 
 	init_fixed_registers(mb_map);
+	g_mbtcp_map = mb_map;
 
 	server_socket = modbus_tcp_listen(ctx, 1);
 	if (server_socket < 0) {
@@ -252,6 +292,7 @@ void *mbtcp_server_main(void *args)
 		modbus_close(ctx);
 	}
 
+	g_mbtcp_map = NULL;
 	modbus_mapping_free(mb_map);
 	modbus_free(ctx);
 	return NULL;
