@@ -28,6 +28,7 @@ uint16_t DATA_FUNCTION_INTERVAL_S = 300;
 
 // 配液称比对上传参数
 #define MIXING_CMD_WRITE_SINGLE       0x06
+#define MIXING_CMD_WRITE_MULTI        0x10
 #define MIXING_TASK_REG_ADDR          0
 #define MIXING_RECIPE_REG_ADDR        6
 #define MIXING_MIX_WEIGHT_REG_ADDR    9
@@ -42,6 +43,7 @@ static bool s_mixing_batch_active = false;
 static bool s_mixing_upload_pending = false;
 static bool s_mixing_compare_failed = false;
 static time_t s_mixing_batch_start_time = 0;
+static time_t s_mixing_wait_log_time = 0;
 static uint8_t s_mixing_slave_addr = 0;
 static char s_mixing_task_no[32] = {0};
 
@@ -1487,6 +1489,43 @@ static bool register_slot_ready(const RegisterData *slot, time_t min_time)
 	return true;
 }
 
+static bool register_slot_ready_safe(const RegisterData *slot, time_t min_time)
+{
+	if (!slot) {
+		return false;
+	}
+	return register_slot_ready(slot, min_time);
+}
+
+static void mixing_log_waiting(const char *reason)
+{
+	time_t now = time(NULL);
+
+	if (now == s_mixing_wait_log_time) {
+		return;
+	}
+	s_mixing_wait_log_time = now;
+
+	if (reason && reason[0] != '\0') {
+		printf("[Mixing] 进入匹配阶段，正在等待数据包: %s\n", reason);
+	} else {
+		printf("[Mixing] 进入匹配阶段，正在等待数据包\n");
+	}
+}
+
+static RegisterData *mixing_pick_slot(uint8_t slave_addr, uint16_t reg_addr, time_t min_time)
+{
+	RegisterData *slot = get_register_data(slave_addr, reg_addr, MIXING_CMD_WRITE_MULTI);
+	if (register_slot_ready_safe(slot, min_time)) {
+		return slot;
+	}
+	slot = get_register_data(slave_addr, reg_addr, MIXING_CMD_WRITE_SINGLE);
+	if (register_slot_ready_safe(slot, min_time)) {
+		return slot;
+	}
+	return NULL;
+}
+
 static void copy_trim_ascii(char *dst, size_t dst_size, const char *src)
 {
 	size_t i = 0;
@@ -1510,6 +1549,9 @@ static void copy_trim_ascii(char *dst, size_t dst_size, const char *src)
 	}
 }
 
+/**
+ * @brief 任务单号写入后开启新的配液批次，重置状态并触发MES拉取
+ */
 static void mixing_start_batch(const RegisterMap *map, const RegisterData *slot)
 {
 	char task_buf[sizeof(s_mixing_task_no)];
@@ -1530,6 +1572,7 @@ static void mixing_start_batch(const RegisterMap *map, const RegisterData *slot)
 	s_mixing_upload_pending = false;
 	s_mixing_compare_failed = false;
 	s_mixing_batch_start_time = slot->last_update;
+	s_mixing_wait_log_time = 0;
 	s_mixing_slave_addr = map->slave_addr;
 	snprintf(s_mixing_task_no, sizeof(s_mixing_task_no), "%s", task_buf);
 
@@ -1547,12 +1590,13 @@ static void mixing_start_batch(const RegisterMap *map, const RegisterData *slot)
 	}
 
 	snprintf(WorkOrder.WorkOrder_No, sizeof(WorkOrder.WorkOrder_No), "%s", task_buf);
-	if (WorkOrder.WorkOrder_No[0] == 'M') {
+	snprintf(WorkOrder.assign_name, sizeof(WorkOrder.assign_name), "%s", task_buf);
+/*	if (WorkOrder.WorkOrder_No[0] == 'M') {
 		WorkOrder.WorkOrder_No[1] = 'O';
-	}
+	}*/
 	http_req_f = 1;
 
-	printf("[Mixing] batch start task=%s slave=0x%02X\n",
+	printf("[Mixing] batch start task=%s slave=0x%02X http_req_f=1\n",
 	       s_mixing_task_no, s_mixing_slave_addr);
 }
 
@@ -1573,7 +1617,7 @@ static bool mixing_check_complete_and_match(void)
 	if (s_mixing_slave_addr == 0) {
 		return false;
 	}
-	if (WorkOrder.assign_name[0] == '\0' || WorkOrder.Product_name[0] == '\0') {
+	if (WorkOrder.Product_name[0] == '\0') {
 		return false;
 	}
 	if (WorkOrder.material_count <= 0) {
@@ -1588,18 +1632,18 @@ static bool mixing_check_complete_and_match(void)
 		return false;
 	}
 
-	task_slot = get_register_data(s_mixing_slave_addr, MIXING_TASK_REG_ADDR, MIXING_CMD_WRITE_SINGLE);
-	recipe_slot = get_register_data(s_mixing_slave_addr, MIXING_RECIPE_REG_ADDR, MIXING_CMD_WRITE_SINGLE);
-	mix_slot = get_register_data(s_mixing_slave_addr, MIXING_MIX_WEIGHT_REG_ADDR, MIXING_CMD_WRITE_SINGLE);
-	if (!register_slot_ready(task_slot, s_mixing_batch_start_time) ||
-	    !register_slot_ready(recipe_slot, s_mixing_batch_start_time) ||
-	    !register_slot_ready(mix_slot, s_mixing_batch_start_time)) {
+	task_slot = mixing_pick_slot(s_mixing_slave_addr, MIXING_TASK_REG_ADDR, s_mixing_batch_start_time);
+	recipe_slot = mixing_pick_slot(s_mixing_slave_addr, MIXING_RECIPE_REG_ADDR, s_mixing_batch_start_time);
+	mix_slot = mixing_pick_slot(s_mixing_slave_addr, MIXING_MIX_WEIGHT_REG_ADDR, s_mixing_batch_start_time);
+	if (!task_slot || !recipe_slot || !mix_slot) {
+		mixing_log_waiting("任务单/配方/配液重量未写满");
 		return false;
 	}
 
 	copy_trim_ascii(task_buf, sizeof(task_buf), task_slot->text_value);
 	copy_trim_ascii(recipe_buf, sizeof(recipe_buf), recipe_slot->text_value);
 	if (task_buf[0] == '\0' || recipe_buf[0] == '\0') {
+		mixing_log_waiting("任务单/配方未完整");
 		return false;
 	}
 
@@ -1608,29 +1652,36 @@ static bool mixing_check_complete_and_match(void)
 
 	expected_count = WorkOrder.material_count;
 
-	for (int i = 0; i < expected_count; i++) {
-		uint16_t base = MIXING_MATERIAL_BASE_ADDR + (uint16_t)(i * MIXING_MATERIAL_STRIDE);
-		RegisterData *name_slot = get_register_data(s_mixing_slave_addr, base + MIXING_MATERIAL_NAME_OFFSET,
-		                                            MIXING_CMD_WRITE_SINGLE);
-		RegisterData *target_slot = get_register_data(s_mixing_slave_addr, base + MIXING_MATERIAL_TARGET_OFFSET,
-		                                              MIXING_CMD_WRITE_SINGLE);
-		RegisterData *actual_slot = get_register_data(s_mixing_slave_addr, base + MIXING_MATERIAL_ACTUAL_OFFSET,
-		                                              MIXING_CMD_WRITE_SINGLE);
-		if (!register_slot_ready(name_slot, s_mixing_batch_start_time) ||
-		    !register_slot_ready(target_slot, s_mixing_batch_start_time) ||
-		    !register_slot_ready(actual_slot, s_mixing_batch_start_time)) {
+	{
+		int actual_count = 0;
+
+		for (int i = 0; i < MIXING_MAX_MATERIALS; i++) {
+			uint16_t base = MIXING_MATERIAL_BASE_ADDR + (uint16_t)(i * MIXING_MATERIAL_STRIDE);
+			RegisterData *target_slot = mixing_pick_slot(s_mixing_slave_addr, base + MIXING_MATERIAL_TARGET_OFFSET,
+			                                             s_mixing_batch_start_time);
+			RegisterData *actual_slot = mixing_pick_slot(s_mixing_slave_addr, base + MIXING_MATERIAL_ACTUAL_OFFSET,
+			                                             s_mixing_batch_start_time);
+			bool ready = (target_slot && actual_slot);
+
+			if (ready) {
+				actual_count++;
+			} else if (i < expected_count) {
+				char wait_buf[64];
+				snprintf(wait_buf, sizeof(wait_buf),
+				         "原料[%d]目标/实际重量未写满", i + 1);
+				mixing_log_waiting(wait_buf);
+				return false;
+			}
+		}
+
+		if (actual_count > expected_count) {
+			printf("[Mixing] compare failed: material_count=%d exceeds mes=%d\n",
+			       actual_count, expected_count);
+			s_mixing_compare_failed = true;
 			return false;
 		}
 	}
 
-	if (strcmp(task_buf, WorkOrder.assign_name) != 0) {
-		if (!s_mixing_compare_failed) {
-			printf("[Mixing] compare failed: task=%s mes=%s\n",
-			       task_buf, WorkOrder.assign_name);
-			s_mixing_compare_failed = true;
-		}
-		return false;
-	}
 	if (strcmp(recipe_buf, WorkOrder.Product_name) != 0) {
 		if (!s_mixing_compare_failed) {
 			printf("[Mixing] compare failed: recipe=%s mes=%s\n",
@@ -1648,49 +1699,7 @@ static bool mixing_check_complete_and_match(void)
 		return false;
 	}
 
-	for (int i = 0; i < expected_count; i++) {
-		uint16_t base = MIXING_MATERIAL_BASE_ADDR + (uint16_t)(i * MIXING_MATERIAL_STRIDE);
-		RegisterData *name_slot = get_register_data(s_mixing_slave_addr, base + MIXING_MATERIAL_NAME_OFFSET,
-		                                            MIXING_CMD_WRITE_SINGLE);
-		char name_buf[64];
-		char mes_name[64];
-		if (!name_slot) {
-			return false;
-		}
-		copy_trim_ascii(name_buf, sizeof(name_buf), name_slot->text_value);
-		copy_trim_ascii(mes_name, sizeof(mes_name), WorkOrder.materials[i].name);
-		if (name_buf[0] == '\0') {
-			return false;
-		}
-		if (strcmp(name_buf, mes_name) != 0) {
-			if (!s_mixing_compare_failed) {
-				printf("[Mixing] compare failed: material[%d]=%s mes=%s\n",
-				       i + 1, name_buf, mes_name);
-				s_mixing_compare_failed = true;
-			}
-			return false;
-		}
-	}
-
-	for (int i = expected_count; i < MIXING_MAX_MATERIALS; i++) {
-		uint16_t base = MIXING_MATERIAL_BASE_ADDR + (uint16_t)(i * MIXING_MATERIAL_STRIDE);
-		RegisterData *name_slot = get_register_data(s_mixing_slave_addr, base + MIXING_MATERIAL_NAME_OFFSET,
-		                                            MIXING_CMD_WRITE_SINGLE);
-		char extra_buf[64];
-		if (!register_slot_ready(name_slot, s_mixing_batch_start_time)) {
-			continue;
-		}
-		copy_trim_ascii(extra_buf, sizeof(extra_buf), name_slot->text_value);
-		if (extra_buf[0] != '\0') {
-			if (!s_mixing_compare_failed) {
-				printf("[Mixing] compare failed: extra material[%d]=%s\n",
-				       i + 1, extra_buf);
-				s_mixing_compare_failed = true;
-			}
-			return false;
-		}
-	}
-
+	s_mixing_compare_failed = false;
 	return true;
 }
 
@@ -1699,7 +1708,7 @@ static void mixing_handle_register_update(const RegisterMap *map, const Register
 	if (!map || !slot) {
 		return;
 	}
-	if (map->cmd != MIXING_CMD_WRITE_SINGLE) {
+	if (map->cmd != MIXING_CMD_WRITE_SINGLE && map->cmd != MIXING_CMD_WRITE_MULTI) {
 		return;
 	}
 
@@ -1746,6 +1755,12 @@ bool modbus_slave_sim_handle(uint8_t *data, size_t len)
 	uint8_t resp[8] = {0};
 	uint16_t crc = 0;
 
+	printf("[RS485-SIM] RX:");
+	for (size_t i = 0; i < len; i++) {
+		printf(" %02X", data[i]);
+	}
+	printf("\n");
+
 	if (!is_modbus_slave_sim_request(data, len, &func)) {
 		return false;
 	}
@@ -1767,6 +1782,11 @@ bool modbus_slave_sim_handle(uint8_t *data, size_t len)
 		crc = ModbusCrc(resp, 6);
 		resp[6] = crc & 0xFF;
 		resp[7] = crc >> 8;
+		printf("[RS485-SIM] TX:");
+		for (int i = 0; i < (int)sizeof(resp); i++) {
+			printf(" %02X", resp[i]);
+		}
+		printf("\n");
 		uart_tx(1, resp, sizeof(resp));
 		return true;
 	}
@@ -1784,7 +1804,7 @@ bool modbus_slave_sim_handle(uint8_t *data, size_t len)
 		for (uint16_t i = 0; i < reg_count; i++) {
 			uint16_t reg_addr = start_reg + i;
 			uint16_t value = (data[7 + i * 2] << 8) | data[8 + i * 2];
-			store_register_data(slave_addr, reg_addr, value, MIXING_CMD_WRITE_SINGLE);
+			store_register_data(slave_addr, reg_addr, value, MIXING_CMD_WRITE_MULTI);
 		}
 
 		resp[0] = slave_addr;
@@ -1796,6 +1816,11 @@ bool modbus_slave_sim_handle(uint8_t *data, size_t len)
 		crc = ModbusCrc(resp, 6);
 		resp[6] = crc & 0xFF;
 		resp[7] = crc >> 8;
+		printf("[RS485-SIM] TX:");
+		for (int i = 0; i < (int)sizeof(resp); i++) {
+			printf(" %02X", resp[i]);
+		}
+		printf("\n");
 		uart_tx(1, resp, sizeof(resp));
 		return true;
 	}
@@ -1889,7 +1914,7 @@ static bool parse_modbus_response(uint8_t *data, size_t len)
  */
 static void process_modbus_sniffer_data(uint8_t *data, size_t len)
 {
-	const bool ignore_read_requests = true;
+	const bool ignore_read_requests = false;
 
 	// 判断帧类型（请求或响应）
 	// Modbus请求帧特征：
@@ -2479,7 +2504,7 @@ void http_data_get(void)
 		} else {
 			WorkOrder.Product_name[0] = '\0';
 		}
-		if (order_name_json && cJSON_IsString(order_name_json)) {
+		if (WorkOrder.assign_name[0] == '\0' && order_name_json && cJSON_IsString(order_name_json)) {
 			snprintf(WorkOrder.assign_name, sizeof(WorkOrder.assign_name), "%s", order_name_json->valuestring);
 		}
 		if (operator_json && cJSON_IsString(operator_json)) {
@@ -2533,6 +2558,19 @@ void http_data_get(void)
 		send_data_p[6] = crc >> 8;
 		uart_tx(1, send_data_p, 7);
 		printf("http get pd quantity is:%d,name:%s\r\n",WorkOrder.quantity,WorkOrder.Product_name);
+		printf("[WorkOrder] order=%s craft=%s total=%.4f %s count=%d\r\n",
+		       workOrder,
+		       WorkOrder.Product_name,
+		       WorkOrder.quantity_double,
+		       WorkOrder.unit,
+		       WorkOrder.material_count);
+		for (int i = 0; i < WorkOrder.material_count; ++i) {
+			printf("[WorkOrder] material[%d]=%s target=%.4f %s\r\n",
+			       i,
+			       WorkOrder.materials[i].name,
+			       WorkOrder.materials[i].target,
+			       WorkOrder.materials[i].unit);
+		}
 //		rk_quantity[] ={0x06,0x03,0x04,0x00,0x00,0x00,0x00,0x00,0x00};
 
 	}
@@ -2567,6 +2605,7 @@ void *data_main()
 			s_mixing_batch_active = false;
 			s_mixing_compare_failed = false;
 			s_mixing_batch_start_time = 0;
+			clear_register_data();
 			printf("[Mixing] data upload done\r\n");
 		}
 
