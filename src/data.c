@@ -20,6 +20,10 @@ DEVICE_485_type g_485_device_type = DEVICE_485_NO_DEVICE;
 int dev_type = 0;
 
 HAAS_DEV_RS485 g_haas_dev_rs485[100];
+#define HAAS_DEV_RS485_MAX (sizeof(g_haas_dev_rs485) / sizeof(g_haas_dev_rs485[0]))
+static double s_value2_filter_th = 0.0;
+static double s_value2_last[HAAS_DEV_RS485_MAX];
+static bool s_value2_last_valid[HAAS_DEV_RS485_MAX];
 uint8_t haas_device_num = 0;
 uint8_t device_no = 0;
 time_t s_haas_data_send_time = 0;
@@ -87,6 +91,7 @@ static uint16_t clamp_data_len(uint16_t requested_len);
 static bool recalc_register_outputs(RegisterData *slot);
 static void sync_register_to_rs485(int index, RegisterData *slot, const RegisterMap *map,
                                    bool aggregated, uint16_t last_word);
+static void filter_value2_by_delta(uint8_t index, HAAS_DEV_RS485 *dev);
 void haas_energy_type2_init(void)
 {
 	if (s_energy_type2_init_done) {
@@ -484,8 +489,33 @@ void haas_device_dataRead1(uint8_t *data)
 
 }
 
+static void filter_value2_by_delta(uint8_t index, HAAS_DEV_RS485 *dev)
+{
+	if (dev == NULL || dev->is_string || s_value2_filter_th <= 0.0) {
+		return;
+	}
+	if (index >= HAAS_DEV_RS485_MAX) {
+		return;
+	}
+	if (!s_value2_last_valid[index]) {
+		s_value2_last[index] = dev->value2;
+		s_value2_last_valid[index] = true;
+		return;
+	}
 
-void haas_device_dataRead(uint8_t *data)
+	double diff = dev->value2 - s_value2_last[index];
+	if (diff < 0.0) {
+		diff = -diff;
+	}
+	if (diff > s_value2_filter_th) {
+		dev->value2 = s_value2_last[index];
+		return;
+	}
+	s_value2_last[index] = dev->value2;
+}
+
+
+void haas_device_dataRead(uint8_t *data, size_t len)
 {
 //	if((data[0] == 0x03) && (data[1] == 0x10))
 //		{
@@ -501,6 +531,10 @@ void haas_device_dataRead(uint8_t *data)
 //		  }
 //		  return;
 //		}
+	if (len < 5 || !check_modbus_crc(data, len)) {
+		return;
+	}
+
 	if((data[1] == 0x03)&&(device_no > 0))
 	{
 	uint8_t addr = device_no - 1;
@@ -584,6 +618,7 @@ void haas_device_dataRead(uint8_t *data)
 		     g_haas_dev_rs485[addr].value2 = g_haas_dev_rs485[addr].value1/10.0;
 		  }
 		}
+		filter_value2_by_delta(addr, &g_haas_dev_rs485[addr]);
 		printf("receive data is:%d,%.1f\r\n",g_haas_dev_rs485[addr].value1,g_haas_dev_rs485[addr].value2);
 		s_waiting_haas_th = false;
 	}
@@ -629,7 +664,7 @@ void on_uart_2_read(uint8_t *data, size_t len)
 	}
 
 
-	haas_device_dataRead(data);
+	haas_device_dataRead(data, len);
 
 	//humi_process(data, len);
 }
@@ -667,6 +702,12 @@ void data_init()
 	if (0 == access(FILENAME, F_OK)) {
 		dev_type = GetIniKeyInt("config", "dev_type", FILENAME);
 		dbg_printf(">>> read dev_type: %d\n", dev_type);
+		s_value2_filter_th = atof(GetIniKeyString("config", "delta_th", FILENAME));
+		if (s_value2_filter_th < 0.0) {
+			s_value2_filter_th = 0.0;
+		}
+		memset(s_value2_last_valid, 0, sizeof(s_value2_last_valid));
+		dbg_printf(">>> read delta_th: %.3f\n", s_value2_filter_th);
 	} else {
 		dbg_printf(">>> no device.conf, dev_type default 0\n");
 	}
@@ -915,7 +956,7 @@ void on_uart_1_read(uint8_t *data, size_t len)
 			haas_device_dataRead1(data);
 	}
 	else
-		haas_device_dataRead(data);
+		haas_device_dataRead(data, len);
 	}
 	
 
