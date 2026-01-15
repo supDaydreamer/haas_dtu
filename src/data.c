@@ -1406,6 +1406,21 @@ static void store_register_data(uint8_t slave_addr, uint16_t reg_addr, uint16_t 
 
 	slot->last_update = time(NULL);
 
+	if (offset == 1 &&
+	    (map->data_type == 1 || map->data_type == 3 || map->data_type == 4 ||
+	     map->data_type == 5 || map->data_type == 6)) {
+		dbg_printf("[Modbus Store] %s Word0:0x%04X Word1:0x%04X cmd:0x%02X (slot %d)\n",
+		           map->name, slot->reg_values[0], slot->reg_values[1], cmd, map_index);
+		uint32_t raw_hi = ((uint32_t)slot->reg_values[0] << 16) | slot->reg_values[1];
+		uint32_t raw_lo = ((uint32_t)slot->reg_values[1] << 16) | slot->reg_values[0];
+		float f_hi = 0.0f;
+		float f_lo = 0.0f;
+		memcpy(&f_hi, &raw_hi, sizeof(f_hi));
+		memcpy(&f_lo, &raw_lo, sizeof(f_lo));
+		dbg_printf("[Modbus Store] %s U32(HL)=%u U32(LH)=%u F32(HL)=%g F32(LH)=%g\n",
+		           map->name, raw_hi, raw_lo, f_hi, f_lo);
+	}
+
 	bool first_valid = !slot->is_valid;
 	if (first_valid) {
 		slot->is_valid = true;
@@ -1513,6 +1528,17 @@ static bool recalc_register_outputs(RegisterData *slot)
 			slot->numeric_value = (double)raw;
 			snprintf(slot->text_value, sizeof(slot->text_value), "%u", raw);
 		}
+		return true;
+	}
+
+	// 32 位无符号整型（低字在前）
+	if (slot->data_type == 5) {
+		if (contiguous < 2) {
+			return false;
+		}
+		uint32_t raw = ((uint32_t)slot->reg_values[1] << 16) | slot->reg_values[0];
+		slot->numeric_value = (double)raw;
+		snprintf(slot->text_value, sizeof(slot->text_value), "%u", raw);
 		return true;
 	}
 

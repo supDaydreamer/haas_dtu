@@ -1,4 +1,4 @@
-﻿#ifndef __DATA_H__
+#ifndef __DATA_H__
 #define __DATA_H__
 
 //#define DATA_FUNCTION_INTERVAL_S		(300)
@@ -71,7 +71,7 @@ typedef struct {
     uint8_t slave_addr;        // 从机地址
     uint16_t reg_addr;         // 起始寄存器地址
     char name[32];             // 寄存器名称
-    uint8_t data_type;         // 数据类型: 0=16位数值, 1=32位数值, 2=ASCII字符串
+    uint8_t data_type;         // 数据类型: 0=uint16, 1=uint32(HL), 2=ASCII, 3=int32/10(HL), 4=float32(HL), 5=uint32(LH), 6=float32(LH)
     uint8_t cmd;               // 功能码
     uint16_t data_len;         // 连续寄存器数量
     bool enabled;              // 是否启用监测
