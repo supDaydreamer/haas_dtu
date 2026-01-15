@@ -1,3 +1,4 @@
+#include <sys/types.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -98,7 +99,7 @@ static const EnergyInitFrame k_energy_init_frames[] = {
 };
 
 static bool s_energy_type2_init_done = false;
-static const useconds_t k_type2_poll_interval_us = 1000 * 1000;  // 1s
+static const unsigned int k_type2_poll_interval_us = 1000 * 1000;  // 1s
 
 // Modbus监测函数前向声明
 static bool check_modbus_crc(uint8_t *data, size_t len);
@@ -2184,9 +2185,9 @@ printf("uart1 send data is:");
 	printf("\r\n");
 	// 等待响应，最多 100ms，每 50ms 轮询一次以降低 CPU 占用
 	s_waiting_haas_th = true;
-	const useconds_t wait_step_us = 500000;
-	const useconds_t timeout_us = 1000000;
-	useconds_t waited_us = 0;
+	const unsigned int wait_step_us = 500000;
+	const unsigned int timeout_us = 1000000;
+	unsigned int waited_us = 0;
 	while (s_waiting_haas_th) {
 		if (waited_us >= timeout_us) {
 			s_waiting_haas_th = false;
