@@ -462,7 +462,7 @@ len +=1;
 			                "\t\"V0%d\": \"%s\",\r\n", i + 1, dev->value_text);
 		} else {
 			len1 = snprintf(s_data + len, sizeof(s_data) - len,
-			                "\t\"V0%d\": %.1f,\r\n", i + 1, dev->value2);
+			                "\t\"V0%d\": %.6f,\r\n", i + 1, dev->value2);
 		}
 	}
 	else
@@ -472,7 +472,7 @@ len +=1;
 			                "\t\"V%d\": \"%s\",\r\n", i + 1, dev->value_text);
 		} else {
 			len1 = snprintf(s_data + len, sizeof(s_data) - len,
-			                "\t\"V%d\": %.1f,\r\n", i + 1, dev->value2);
+			                "\t\"V%d\": %.6f,\r\n", i + 1, dev->value2);
 		}
 	}
 	if (len1 < 0) {
@@ -548,32 +548,32 @@ printf("mqtt_data_upload topic:%s\r\n",s_topic_buf);
 //      out_publish_msg(s_topic_buf, s_payload);
 #if 0
 snprintf(s_payload, sizeof(s_payload), "{\r\n\
-		\t\"V01\": %.1f,\r\n\
-		\t\"V02\": %.1f,\r\n\
-		\t\"V03\": %.1f,\r\n\
-		\t\"V04\": %.1f,\r\n\
-		\t\"V05\": %.1f,\r\n\
-		\t\"V06\": %.1f,\r\n\
-		\t\"V07\": %.1f,\r\n\
-		\t\"V08\": %.1f,\r\n\
-		\t\"V09\": %.1f,\r\n\
-		\t\"V10\": %.1f,\r\n\
-		\t\"V11\": %.1f,\r\n\
-		\t\"V12\": %.1f,\r\n\
-		\t\"V13\": %.1f,\r\n\
-		\t\"V14\": %.1f,\r\n\
-		\t\"V15\": %.1f,\r\n\
-		\t\"V16\": %.1f,\r\n\
-		\t\"V17\": %.1f,\r\n\
-		\t\"V18\": %.1f,\r\n\
-		\t\"V19\": %.1f,\r\n\
-		\t\"V20\": %.1f,\r\n\
-		\t\"V21\": %.1f,\r\n\
-		\t\"V22\": %.1f,\r\n\
-		\t\"V23\": %.1f,\r\n\
-		\t\"V24\": %.1f,\r\n\
-		\t\"V25\": %.1f,\r\n\
-		\t\"V26\": %.1f\r\n\
+		\t\"V01\": %.6f,\r\n\
+		\t\"V02\": %.6f,\r\n\
+		\t\"V03\": %.6f,\r\n\
+		\t\"V04\": %.6f,\r\n\
+		\t\"V05\": %.6f,\r\n\
+		\t\"V06\": %.6f,\r\n\
+		\t\"V07\": %.6f,\r\n\
+		\t\"V08\": %.6f,\r\n\
+		\t\"V09\": %.6f,\r\n\
+		\t\"V10\": %.6f,\r\n\
+		\t\"V11\": %.6f,\r\n\
+		\t\"V12\": %.6f,\r\n\
+		\t\"V13\": %.6f,\r\n\
+		\t\"V14\": %.6f,\r\n\
+		\t\"V15\": %.6f,\r\n\
+		\t\"V16\": %.6f,\r\n\
+		\t\"V17\": %.6f,\r\n\
+		\t\"V18\": %.6f,\r\n\
+		\t\"V19\": %.6f,\r\n\
+		\t\"V20\": %.6f,\r\n\
+		\t\"V21\": %.6f,\r\n\
+		\t\"V22\": %.6f,\r\n\
+		\t\"V23\": %.6f,\r\n\
+		\t\"V24\": %.6f,\r\n\
+		\t\"V25\": %.6f,\r\n\
+		\t\"V26\": %.6f\r\n\
 		}", g_haas_dev_rs485[0].value2,g_haas_dev_rs485[1].value2,g_haas_dev_rs485[2].value2,g_haas_dev_rs485[3].value2,g_haas_dev_rs485[4].value2,g_haas_dev_rs485[5].value2,g_haas_dev_rs485[6].value2,g_haas_dev_rs485[7].value2,g_haas_dev_rs485[8].value2,g_haas_dev_rs485[9].value2,g_haas_dev_rs485[10].value2,g_haas_dev_rs485[11].value2,g_haas_dev_rs485[12].value2,g_haas_dev_rs485[13].value2,g_haas_dev_rs485[14].value2,g_haas_dev_rs485[15].value2,g_haas_dev_rs485[16].value2,g_haas_dev_rs485[17].value2,g_haas_dev_rs485[18].value2,g_haas_dev_rs485[19].value2,g_haas_dev_rs485[20].value2,g_haas_dev_rs485[21].value2,g_haas_dev_rs485[22].value2,g_haas_dev_rs485[23].value2,g_haas_dev_rs485[24].value2,g_haas_dev_rs485[25].value2);
 #endif
 printf("upload message:%s\r\n",s_data);

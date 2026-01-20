@@ -535,7 +535,7 @@ for(int i =0;i<haas_device_num;i++)
 			                "\t\"V0%d\": \"%s\",\r\n", i + 1, dev->value_text);
 		} else {
 			len1 = snprintf(s_data + len, sizeof(s_data) - len,
-			                "\t\"V0%d\": %.1f,\r\n", i + 1, dev->value2);
+			                "\t\"V0%d\": %.6f,\r\n", i + 1, dev->value2);
 		}
 	}
 	else
@@ -545,7 +545,7 @@ for(int i =0;i<haas_device_num;i++)
 			                "\t\"V%d\": \"%s\",\r\n", i + 1, dev->value_text);
 		} else {
 			len1 = snprintf(s_data + len, sizeof(s_data) - len,
-			                "\t\"V%d\": %.1f,\r\n", i + 1, dev->value2);
+			                "\t\"V%d\": %.6f,\r\n", i + 1, dev->value2);
 		}
 	}
 	if (len1 < 0) {
