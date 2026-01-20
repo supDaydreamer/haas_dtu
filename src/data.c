@@ -2525,7 +2525,7 @@ void http_data_get(void)
 //	cJSON *data_json = cJSON_GetObjectItemCaseSensitive(res, "data");
 	if (data_json != NULL) {
 		cJSON *dataobject_json = cJSON_GetObjectItemCaseSensitive(data_json, "data");
-		cJSON *name_json = cJSON_GetObjectItemCaseSensitive(dataobject_json, "Craft_Name");
+		cJSON *name_json = cJSON_GetObjectItemCaseSensitive(dataobject_json, "Material_Name");
 		cJSON *quantity_json = cJSON_GetObjectItemCaseSensitive(dataobject_json, "AssignProduct_Quantity");
 		cJSON *order_name_json = cJSON_GetObjectItemCaseSensitive(dataobject_json, "Assign_Name");
 		cJSON *operator_json = cJSON_GetObjectItemCaseSensitive(dataobject_json, "Create_User");
@@ -2555,7 +2555,7 @@ void http_data_get(void)
 			snprintf(WorkOrder.unit, sizeof(WorkOrder.unit), "%s", unit_str);
 		}
 
-		printf("assign info: order=%s, operator=%s, craft=%s, total=%.4f %s\r\n",
+		printf("assign info: order=%s, operator=%s, material=%s, total=%.4f %s\r\n",
 		       (order_name_json && cJSON_IsString(order_name_json)) ? order_name_json->valuestring : "",
 		       (operator_json && cJSON_IsString(operator_json)) ? operator_json->valuestring : "",
 		       WorkOrder.Product_name,
@@ -2599,7 +2599,7 @@ void http_data_get(void)
 		send_data_p[6] = crc >> 8;
 		uart_tx(1, send_data_p, 7);
 		printf("http get pd quantity is:%d,name:%s\r\n",WorkOrder.quantity,WorkOrder.Product_name);
-		printf("[WorkOrder] order=%s craft=%s total=%.4f %s count=%d\r\n",
+		printf("[WorkOrder] order=%s material=%s total=%.4f %s count=%d\r\n",
 		       workOrder,
 		       WorkOrder.Product_name,
 		       WorkOrder.quantity_double,
