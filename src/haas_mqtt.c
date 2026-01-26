@@ -92,6 +92,25 @@ static void append_vision_upload_fields(char *buf, int buf_len, int *len)
 		return;
 	}
 	*len += n;
+
+	n = snprintf(buf + *len, buf_len - *len, ",\r\n\t\"OK\": [");
+	if (n < 0 || n >= buf_len - *len) {
+		return;
+	}
+	*len += n;
+	for (int i = 0; i < count; ++i) {
+		n = snprintf(buf + *len, buf_len - *len, "%s%u",
+		             (i == 0) ? "" : ", ", (unsigned int)vision_get_upload_ok(i));
+		if (n < 0 || n >= buf_len - *len) {
+			return;
+		}
+		*len += n;
+	}
+	n = snprintf(buf + *len, buf_len - *len, "]");
+	if (n < 0 || n >= buf_len - *len) {
+		return;
+	}
+	*len += n;
 }
 
 

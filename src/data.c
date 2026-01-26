@@ -82,6 +82,7 @@ static const unsigned int k_type2_poll_interval_us = 1000 * 1000;  // 1s
 typedef struct {
 	float lengths[VISION_MAX_SAMPLES];
 	float widths[VISION_MAX_SAMPLES];
+	uint16_t oks[VISION_MAX_SAMPLES];
 	int count;
 	time_t first_ts;
 } VisionSampleBuffer;
@@ -89,6 +90,7 @@ typedef struct {
 typedef struct {
 	float lengths[VISION_MAX_SAMPLES];
 	float widths[VISION_MAX_SAMPLES];
+	uint16_t oks[VISION_MAX_SAMPLES];
 	int count;
 } VisionUploadSnapshot;
 
@@ -133,7 +135,7 @@ static void sync_register_to_rs485(int index, RegisterData *slot, const Register
                                    bool aggregated, uint16_t last_word);
 static void filter_value2_by_delta(uint8_t index, HAAS_DEV_RS485 *dev);
 
-void vision_store_sample(float length, float width)
+void vision_store_sample(float length, float width, uint16_t ok)
 {
 	int count_threshold = 0;
 	int interval_sec = 0;
@@ -153,12 +155,15 @@ void vision_store_sample(float length, float width)
 		        sizeof(float) * (VISION_MAX_SAMPLES - 1));
 		memmove(g_vision_buf.widths, g_vision_buf.widths + 1,
 		        sizeof(float) * (VISION_MAX_SAMPLES - 1));
+		memmove(g_vision_buf.oks, g_vision_buf.oks + 1,
+		        sizeof(uint16_t) * (VISION_MAX_SAMPLES - 1));
 		g_vision_buf.count = VISION_MAX_SAMPLES - 1;
 		g_vision_buf.first_ts = now;
 	}
 
 	g_vision_buf.lengths[g_vision_buf.count] = length;
 	g_vision_buf.widths[g_vision_buf.count] = width;
+	g_vision_buf.oks[g_vision_buf.count] = ok;
 	g_vision_buf.count++;
 
 	if (g_vision_buf.count >= count_threshold) {
@@ -209,6 +214,7 @@ int vision_prepare_upload_snapshot(void)
 		}
 		memcpy(g_vision_upload.lengths, g_vision_buf.lengths, sizeof(float) * count);
 		memcpy(g_vision_upload.widths, g_vision_buf.widths, sizeof(float) * count);
+		memcpy(g_vision_upload.oks, g_vision_buf.oks, sizeof(uint16_t) * count);
 		g_vision_upload.count = count;
 		g_vision_buf.count = 0;
 		g_vision_buf.first_ts = 0;
@@ -246,6 +252,14 @@ float vision_get_upload_width(int index)
 		return 0.0f;
 	}
 	return g_vision_upload.widths[index];
+}
+
+uint16_t vision_get_upload_ok(int index)
+{
+	if (index < 0 || index >= g_vision_upload.count) {
+		return 0;
+	}
+	return g_vision_upload.oks[index];
 }
 void haas_energy_type2_init(void)
 {
