@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "data.h"
+#include "haas_mqtt.h"
 #include "ini.h"
 #include "json.h"
 #include "tcp_client.h"
@@ -92,6 +93,12 @@ static void log_scan_json(const char *json_buf)
 	       barcode ? barcode : "",
 	       status ? status : "",
 	       timestamp ? timestamp : "");
+
+	if (device_no && barcode && status && timestamp) {
+		haas_mqtt_send_scan_property(device_no, barcode, status, timestamp);
+	} else {
+		printf("[TCP-CLIENT] scan json missing field, skip mqtt\n");
+	}
 
 	close_json(root);
 }

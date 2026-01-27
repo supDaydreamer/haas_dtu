@@ -657,3 +657,36 @@ printf("upload message:%s\r\n",s_data);
 do_mqtt_send(s_mqtt_client, s_topic_buf, s_data);
 
 }
+
+int haas_mqtt_send_scan_property(const char *device_no,
+				 const char *barcode,
+				 const char *status,
+				 const char *timestamp)
+{
+	char s_topic_buf[MQTT_TOPIC_LEN_MAX] = {0};
+	char s_data[512];
+	int len;
+
+	if (!g_bf_code || product_ID == 0) {
+		printf("[PAHO] scan upload skipped, device info not ready\n");
+		return -1;
+	}
+
+	if (!device_no || !barcode || !status || !timestamp) {
+		printf("[PAHO] scan upload skipped, missing field\n");
+		return -1;
+	}
+
+	snprintf(s_topic_buf, sizeof(s_topic_buf), "/%d/%s/property/post", product_ID, g_bf_code);
+
+	len = snprintf(s_data, sizeof(s_data),
+		       "{\r\n\t\"deviceNo\": \"%s\",\r\n\t\"barcode\": \"%s\",\r\n\t\"status\": \"%s\",\r\n\t\"timestamp\": \"%s\"\r\n}",
+		       device_no, barcode, status, timestamp);
+	if (len < 0 || len >= (int)sizeof(s_data)) {
+		printf("[PAHO] scan upload payload too long\n");
+		return -1;
+	}
+
+	printf("[PAHO] scan upload topic:%s\n", s_topic_buf);
+	return do_mqtt_send(s_mqtt_client, s_topic_buf, s_data);
+}

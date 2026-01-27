@@ -3,5 +3,9 @@
 
 void *haas_mqtt_main();
 void haas_mqtt_data_upload(void);
+int haas_mqtt_send_scan_property(const char *device_no,
+				 const char *barcode,
+				 const char *status,
+				 const char *timestamp);
 
 #endif
