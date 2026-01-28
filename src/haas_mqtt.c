@@ -35,87 +35,26 @@ static char s_client_id[30];
 static uint16_t product_ID;
 static char s_device_control_topic_buf[MQTT_TOPIC_LEN_MAX] = {0};
 
+static int s_dev_config_log = 0;
+
 
 
 static MQTTAsync s_mqtt_client;
 
-static void append_vision_upload_fields(char *buf, int buf_len, int *len)
-{
-	int count = vision_get_upload_count();
-	int n = 0;
-
-	if (count <= 0 || !buf || !len) {
-		return;
-	}
-
-	n = snprintf(buf + *len, buf_len - *len, "%s\"NUM\": %d",
-	             (*len > 1) ? ",\r\n\t" : "\r\n\t", count);
-	if (n < 0 || n >= buf_len - *len) {
-		return;
-	}
-	*len += n;
-
-	n = snprintf(buf + *len, buf_len - *len, ",\r\n\t\"VL\": [");
-	if (n < 0 || n >= buf_len - *len) {
-		return;
-	}
-	*len += n;
-	for (int i = 0; i < count; ++i) {
-		n = snprintf(buf + *len, buf_len - *len, "%s%.6f",
-		             (i == 0) ? "" : ", ", vision_get_upload_length(i));
-		if (n < 0 || n >= buf_len - *len) {
-			return;
-		}
-		*len += n;
-	}
-	n = snprintf(buf + *len, buf_len - *len, "]");
-	if (n < 0 || n >= buf_len - *len) {
-		return;
-	}
-	*len += n;
-
-	n = snprintf(buf + *len, buf_len - *len, ",\r\n\t\"VW\": [");
-	if (n < 0 || n >= buf_len - *len) {
-		return;
-	}
-	*len += n;
-	for (int i = 0; i < count; ++i) {
-		n = snprintf(buf + *len, buf_len - *len, "%s%.6f",
-		             (i == 0) ? "" : ", ", vision_get_upload_width(i));
-		if (n < 0 || n >= buf_len - *len) {
-			return;
-		}
-		*len += n;
-	}
-	n = snprintf(buf + *len, buf_len - *len, "]");
-	if (n < 0 || n >= buf_len - *len) {
-		return;
-	}
-	*len += n;
-
-	n = snprintf(buf + *len, buf_len - *len, ",\r\n\t\"OK\": [");
-	if (n < 0 || n >= buf_len - *len) {
-		return;
-	}
-	*len += n;
-	for (int i = 0; i < count; ++i) {
-		n = snprintf(buf + *len, buf_len - *len, "%s%u",
-		             (i == 0) ? "" : ", ", (unsigned int)vision_get_upload_ok(i));
-		if (n < 0 || n >= buf_len - *len) {
-			return;
-		}
-		*len += n;
-	}
-	n = snprintf(buf + *len, buf_len - *len, "]");
-	if (n < 0 || n >= buf_len - *len) {
-		return;
-	}
-	*len += n;
-}
-
 
 static int do_mqtt_connect(MQTTAsync client, unsigned int wait_time);
 static int do_mqtt_subscribe(MQTTAsync client, unsigned int wait_time);
+
+static unsigned long s_send_total = 0;
+static unsigned long s_send_ok = 0;
+static unsigned long s_send_fail = 0;
+static unsigned long s_send_skip = 0;
+
+static void log_send_stats(void)
+{
+	printf("[PAHO] send stat total=%lu ok=%lu fail=%lu skip=%lu\n",
+	       s_send_total, s_send_ok, s_send_fail, s_send_skip);
+}
 
 
 
@@ -309,14 +248,24 @@ static int do_mqtt_send(MQTTAsync client, char *topic, char *msg)
 	pub_opts.onFailure = on_send_failure;
 	pub_opts.context = (void *)s_seq;
 
+	s_send_total++;
 	if (client && MQTTAsync_isConnected(client)) {
 		printf("[PAHO] seq=%u do_mqtt_send() ...\n", s_seq);
 		if ((rc = MQTTAsync_sendMessage(client, topic, &pubmsg, &pub_opts)) != MQTTASYNC_SUCCESS) {
+			s_send_fail++;
 			printf("[PAHO] seq=%u do_mqtt_send() failed: %d\n", s_seq, rc);
+			log_send_stats();
+		} else {
+			s_send_ok++;
 		}
 	} else {
 		rc = MQTTASYNC_DISCONNECTED;
+		s_send_skip++;
 		printf("[PAHO] not connected, seq=%u do_mqtt_send() skip ...\n", s_seq);
+		log_send_stats();
+	}
+	if ((s_send_total % 100) == 0) {
+		log_send_stats();
 	}
 	s_seq++;
 	return rc;
@@ -486,7 +435,11 @@ void *haas_mqtt_main(void)
 		g_haas_dev_rs485[i].cmd = GetIniKeyInt(item_name, item_num4, FILENAME);
 		g_haas_dev_rs485[i].type = GetIniKeyInt(item_name, item_num5, FILENAME);
 		//strcpy(floor_id,GetIniKeyString("config","floor_id",FILENAME));
-		printf("haas device num is:%s,dev_add:%d,reg_add:%d,cmd:%d,data_len:%d,type:%d\r\n",item_name,g_haas_dev_rs485[i].dev_add,g_haas_dev_rs485[i].reg_add,g_haas_dev_rs485[i].cmd,g_haas_dev_rs485[i].data_len,g_haas_dev_rs485[i].type);
+		if (s_dev_config_log) {
+			printf("haas device num is:%s,dev_add:%d,reg_add:%d,cmd:%d,data_len:%d,type:%d\r\n",
+			       item_name, g_haas_dev_rs485[i].dev_add, g_haas_dev_rs485[i].reg_add,
+			       g_haas_dev_rs485[i].cmd, g_haas_dev_rs485[i].data_len, g_haas_dev_rs485[i].type);
+		}
 		//item_name[20] = "";
 	}
 	int dev_ctrl01 = GetIniKeyInt("config", "dev_ctrl01", FILENAME);
@@ -616,8 +569,6 @@ if (len >= 3) {
 		                ",\r\n\t\"%s\": \"%s\"", key_tw, tw_buf);
 	}
 
-	append_vision_upload_fields(s_data, sizeof(s_data), &len);
-
 len += snprintf(s_data + len, sizeof(s_data) - len, "\r\n}");
 
 printf("mqtt_data_upload topic:%s\r\n",s_topic_buf);
@@ -656,4 +607,19 @@ printf("upload message:%s\r\n",s_data);
 //out_publish_msg(s_topic_buf,s_data);
 do_mqtt_send(s_mqtt_client, s_topic_buf, s_data);
 
+}
+
+void haas_mqtt_vision_upload(float length, float width, uint16_t ok)
+{
+	char s_data[256];
+	char s_topic_buf[MQTT_TOPIC_LEN_MAX] = {0};
+
+	snprintf(s_topic_buf, sizeof(s_topic_buf), "/%d/%s/property/post", product_ID, g_bf_code);
+	snprintf(s_data, sizeof(s_data),
+	         "{\r\n\t\"NUM\": 1,\r\n\t\"VL\": [%.6f],\r\n\t\"VW\": [%.6f],\r\n\t\"OK\": [%u]\r\n}",
+	         length, width, (unsigned int)ok);
+
+	printf("vision_upload topic:%s\r\n", s_topic_buf);
+	printf("vision_upload message:%s\r\n", s_data);
+	do_mqtt_send(s_mqtt_client, s_topic_buf, s_data);
 }

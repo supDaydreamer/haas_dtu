@@ -383,6 +383,8 @@ static bool s_register_map_initialized = false;
 static uint8_t s_modbus_rx_buffer[256] = {0};
 static uint8_t s_modbus_rx_index = 0;
 static time_t s_last_rx_time = 0;
+static int s_modbus_store_log = 0;
+static int s_modbus_map_log = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 void on_haas_time_receive(HAAS_TIME haas_time)
@@ -863,22 +865,6 @@ void data_init()
 
 	if (0 == access(CONFIG_FILE, F_OK)) {
 		g_485_device_type = GetIniKeyInt("cfg", "device_type", CONFIG_FILE);
-		dbg_printf(">>> read device_type: %u\n", g_485_device_type);
-	} else {
-		dbg_printf(">>> no config file!\n");
-	}
-
-	if (0 == access(FILENAME, F_OK)) {
-		dev_type = GetIniKeyInt("config", "dev_type", FILENAME);
-		dbg_printf(">>> read dev_type: %d\n", dev_type);
-		s_value2_filter_th = atof(GetIniKeyString("config", "delta_th", FILENAME));
-		if (s_value2_filter_th < 0.0) {
-			s_value2_filter_th = 0.0;
-		}
-		memset(s_value2_last_valid, 0, sizeof(s_value2_last_valid));
-		dbg_printf(">>> read delta_th: %.3f\n", s_value2_filter_th);
-	} else {
-		dbg_printf(">>> no device.conf, dev_type default 0\n");
 	}
 }
 
@@ -1142,8 +1128,10 @@ static void init_register_map(void)
 	extern uint8_t haas_device_num;
 	haas_device_num = GetIniKeyInt("config", "haas_dev_num", FILENAME);
 
-	dbg_printf("[Modbus Monitor] Loading register map from config file...\n");
-	dbg_printf("[Modbus Monitor] Device count: %d\n", haas_device_num);
+	if (s_modbus_map_log) {
+		dbg_printf("[Modbus Monitor] Loading register map from config file...\n");
+		dbg_printf("[Modbus Monitor] Device count: %d\n", haas_device_num);
+	}
 
 	g_register_map_count = 0;
 
@@ -1192,13 +1180,17 @@ static void init_register_map(void)
 		map->data_len = effective_len;
 		map->enabled = true;
 
-		dbg_printf("[Modbus Monitor] Loaded: %s -> Addr:0x%02X Reg:0x%04X Cmd:0x%02X Type:%d Len:%d\n",
-		           item_name, dev_add, reg_add, cmd, type, effective_len);
+		if (s_modbus_map_log) {
+			dbg_printf("[Modbus Monitor] Loaded: %s -> Addr:0x%02X Reg:0x%04X Cmd:0x%02X Type:%d Len:%d\n",
+			           item_name, dev_add, reg_add, cmd, type, effective_len);
+		}
 
 		g_register_map_count++;
 	}
 
-	dbg_printf("[Modbus Monitor] Register map initialized: %d entries\n", g_register_map_count);
+	if (s_modbus_map_log) {
+		dbg_printf("[Modbus Monitor] Register map initialized: %d entries\n", g_register_map_count);
+	}
 
 	for (int i = 0; i < g_register_map_count; i++) {
 		RegisterData *slot = &g_register_data[i];
@@ -1218,11 +1210,15 @@ static void init_register_map(void)
 		slot->last_update = 0;
 		slot->is_valid = false;
 
-		dbg_printf("[Modbus Init] Pre-allocated slot %d for %s (Addr:0x%02X Reg:0x%04X)\n",
-		           i, map->name, map->slave_addr, map->reg_addr);
+		if (s_modbus_map_log) {
+			dbg_printf("[Modbus Init] Pre-allocated slot %d for %s (Addr:0x%02X Reg:0x%04X)\n",
+			           i, map->name, map->slave_addr, map->reg_addr);
+		}
 	}
 
-	dbg_printf("[Modbus Init] Pre-allocated %d storage slots in order\n", g_register_map_count);
+	if (s_modbus_map_log) {
+		dbg_printf("[Modbus Init] Pre-allocated %d storage slots in order\n", g_register_map_count);
+	}
 }
 
 static void ensure_register_map_initialized(void)
@@ -1418,8 +1414,10 @@ static void store_register_data(uint8_t slave_addr, uint16_t reg_addr, uint16_t 
 	}
 
 	if (map_index == -1) {
-		dbg_printf("[Modbus Store] Ignore: Addr:%02X Reg:%04X value:%d cmd:0x%02X (not in config)\n",
-		           slave_addr, reg_addr, value, cmd);
+		if (s_modbus_store_log) {
+			dbg_printf("[Modbus Store] Ignore: Addr:%02X Reg:%04X value:%d cmd:0x%02X (not in config)\n",
+			           slave_addr, reg_addr, value, cmd);
+		}
 		return;
 	}
 
@@ -1440,8 +1438,10 @@ static void store_register_data(uint8_t slave_addr, uint16_t reg_addr, uint16_t 
 	}
 
 	if (offset >= effective_len || offset >= (REGISTER_VALUE_MAX_BYTES / 2)) {
-		dbg_printf("[Modbus Store] Ignore: Addr:%02X Reg:%04X offset:%u exceeds range Len:%u (slot %d)\n",
-		           slave_addr, reg_addr, offset, effective_len, map_index);
+		if (s_modbus_store_log) {
+			dbg_printf("[Modbus Store] Ignore: Addr:%02X Reg:%04X offset:%u exceeds range Len:%u (slot %d)\n",
+			           slave_addr, reg_addr, offset, effective_len, map_index);
+		}
 		return;
 	}
 
@@ -1464,16 +1464,20 @@ static void store_register_data(uint8_t slave_addr, uint16_t reg_addr, uint16_t 
 	if (offset == 1 &&
 	    (map->data_type == 1 || map->data_type == 3 || map->data_type == 4 ||
 	     map->data_type == 5 || map->data_type == 6)) {
-		dbg_printf("[Modbus Store] %s Word0:0x%04X Word1:0x%04X cmd:0x%02X (slot %d)\n",
-		           map->name, slot->reg_values[0], slot->reg_values[1], cmd, map_index);
+		if (s_modbus_store_log) {
+			dbg_printf("[Modbus Store] %s Word0:0x%04X Word1:0x%04X cmd:0x%02X (slot %d)\n",
+			           map->name, slot->reg_values[0], slot->reg_values[1], cmd, map_index);
+		}
 		uint32_t raw_hi = ((uint32_t)slot->reg_values[0] << 16) | slot->reg_values[1];
 		uint32_t raw_lo = ((uint32_t)slot->reg_values[1] << 16) | slot->reg_values[0];
 		float f_hi = 0.0f;
 		float f_lo = 0.0f;
 		memcpy(&f_hi, &raw_hi, sizeof(f_hi));
 		memcpy(&f_lo, &raw_lo, sizeof(f_lo));
-		dbg_printf("[Modbus Store] %s U32(HL)=%u U32(LH)=%u F32(HL)=%g F32(LH)=%g\n",
-		           map->name, raw_hi, raw_lo, f_hi, f_lo);
+		if (s_modbus_store_log) {
+			dbg_printf("[Modbus Store] %s U32(HL)=%u U32(LH)=%u F32(HL)=%g F32(LH)=%g\n",
+			           map->name, raw_hi, raw_lo, f_hi, f_lo);
+		}
 	}
 
 	bool first_valid = !slot->is_valid;
@@ -1486,20 +1490,30 @@ static void store_register_data(uint8_t slave_addr, uint16_t reg_addr, uint16_t 
 	sync_register_to_rs485(map_index, slot, map, aggregated, value);
 
 	if (map->data_type == 2) {
-		dbg_printf("[Modbus Store] %s ASCII=\"%s\" offset:%u cmd:0x%02X (slot %d)\n",
-		           map->name, slot->text_value, offset, cmd, map_index);
+		if (s_modbus_store_log) {
+			dbg_printf("[Modbus Store] %s ASCII=\"%s\" offset:%u cmd:0x%02X (slot %d)\n",
+			           map->name, slot->text_value, offset, cmd, map_index);
+		}
 	} else if (map->data_type == 3 && aggregated) {
-		dbg_printf("[Modbus Store] %s Value(signed32)=%s offset:%u cmd:0x%02X (slot %d)\n",
-		           map->name, slot->text_value, offset, cmd, map_index);
+		if (s_modbus_store_log) {
+			dbg_printf("[Modbus Store] %s Value(signed32)=%s offset:%u cmd:0x%02X (slot %d)\n",
+			           map->name, slot->text_value, offset, cmd, map_index);
+		}
 	} else if (map->data_type == 4 && aggregated) {
-		dbg_printf("[Modbus Store] %s Value(float32)=%s offset:%u cmd:0x%02X (slot %d)\n",
-		           map->name, slot->text_value, offset, cmd, map_index);
+		if (s_modbus_store_log) {
+			dbg_printf("[Modbus Store] %s Value(float32)=%s offset:%u cmd:0x%02X (slot %d)\n",
+			           map->name, slot->text_value, offset, cmd, map_index);
+		}
 	} else if (aggregated) {
-		dbg_printf("[Modbus Store] %s Value:%s offset:%u cmd:0x%02X (slot %d)\n",
-		           map->name, slot->text_value, offset, cmd, map_index);
+		if (s_modbus_store_log) {
+			dbg_printf("[Modbus Store] %s Value:%s offset:%u cmd:0x%02X (slot %d)\n",
+			           map->name, slot->text_value, offset, cmd, map_index);
+		}
 	} else {
-		dbg_printf("[Modbus Store] %s Raw:0x%04X offset:%u cmd:0x%02X (slot %d)\n",
-		           map->name, value, offset, cmd, map_index);
+		if (s_modbus_store_log) {
+			dbg_printf("[Modbus Store] %s Raw:0x%04X offset:%u cmd:0x%02X (slot %d)\n",
+			           map->name, value, offset, cmd, map_index);
+		}
 	}
 }
 
@@ -2419,15 +2433,6 @@ void *data_main()
 			http_data_get();
 		}
 		time_t now_time = time(NULL);
-		vision_check_timeout();
-		if (vision_is_upload_pending()) {
-			if (vision_prepare_upload_snapshot() > 0) {
-				mqtt_data_upload();
-				haas_mqtt_data_upload();
-				s_mqtt_dataUpload_time = now_time;
-				vision_clear_upload_snapshot();
-			}
-		}
 
 		int upload_time = GetIniKeyInt("config", "upload_time", FILENAME);
 		if (upload_time <= 0) {

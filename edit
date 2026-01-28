@@ -1,0 +1,432 @@
+#!/usr/bin/lua
+
+-- Configuration file path constant
+local DEFAULT_CONFIG_PATH = "/mnt/usr/device.conf"
+
+local function escape_lua_pattern(s)
+    return (s:gsub("(%W)", "%%%1"))
+end
+
+local function url_decode(s)
+    if not s then return s end
+    s = s:gsub("+", " ")
+    s = s:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
+    return s
+end
+
+local function parse_qs(qs)
+    local params = {}
+    for pair in qs:gmatch("([^&]+)") do
+        local k, v = pair:match("^([^=]*)=(.*)$")
+        k = url_decode(k or "")
+        v = url_decode(v or "")
+        if params[k] == nil then
+            params[k] = { v }
+        else
+            table.insert(params[k], v)
+        end
+    end
+    return params
+end
+
+local function get_first(params, key)
+    local v = params[key]
+    if type(v) == "table" then
+        return v[1]
+    end
+    return v
+end
+
+-- Function to read entire file content
+local function read_file_content(filepath)
+    local file = io.open(filepath, "r")
+    if not file then return nil end
+    local content = file:read("*a")
+    file:close()
+    return content
+end
+
+-- Function to write entire file content
+local function write_file_content(filepath, content)
+    local tmp_path = filepath .. ".tmp"
+    local file = io.open(tmp_path, "w")
+    if not file then return false end
+    file:write(content)
+    file:close()
+    if not os.rename(tmp_path, filepath) then
+        os.remove(tmp_path)
+        return false
+    end
+    return true
+end
+
+-- Reads a specific key from INI file
+local function read_ini(filepath, group, key)
+    local file = io.open(filepath, "r")
+    if not file then return nil end
+    
+    local in_group = false
+    local group_pat = escape_lua_pattern(group)
+    for line in file:lines() do
+        line = line:gsub("%s+$", "")
+        if line:match("^%["..group_pat.."%]$") then
+            in_group = true
+        elseif in_group and line:match("^%[.+%]$") then
+            break
+        elseif in_group then
+            local k, v = line:match("^([^=]+)=(.+)$")
+            if k and k:gsub("%s+", "") == key then
+                file:close()
+                return v:gsub("^%s*(.-)%s*$", "%1")
+            end
+        end
+    end
+    file:close()
+    return nil
+end
+
+-- Writes a key-value pair to INI file
+local function write_ini(filepath, group, key, value)
+    local lines = {}
+    local file = io.open(filepath, "r")
+    if file then
+        for line in file:lines() do
+            table.insert(lines, line)
+        end
+        file:close()
+    end
+
+    local in_group = false
+    local modified = false
+    local new_lines = {}
+    local group_pos = 0
+    local group_pat = escape_lua_pattern(group)
+    local key_pat = escape_lua_pattern(key)
+
+    for i, line in ipairs(lines) do
+        if line:match("^%["..group_pat.."%]$") then
+            in_group = true
+            group_pos = #new_lines + 1
+        elseif in_group and line:match("^%[.+%]$") then
+            in_group = false
+        elseif in_group and line:match("^%s*"..key_pat.."%s*=") then
+            line = key .. "=" .. value
+            modified = true
+        end
+        table.insert(new_lines, line)
+    end
+
+    if not modified then
+        if group_pos > 0 then
+            table.insert(new_lines, group_pos + 1, key .. "=" .. value)
+        else
+            table.insert(new_lines, "["..group.."]")
+            table.insert(new_lines, key .. "=" .. value)
+        end
+    end
+
+    local tmp_path = filepath .. ".tmp"
+    file = io.open(tmp_path, "w")
+    if not file then return false end
+    file:write(table.concat(new_lines, "\n"))
+    file:close()
+    if not os.rename(tmp_path, filepath) then
+        os.remove(tmp_path)
+        return false
+    end
+    return true
+end
+
+-- Parses INI file while preserving original order
+local function parse_ini_ordered(filepath)
+    local groups = {}
+    local group_order = {}
+    local key_order = {}
+    local current_group = nil
+    local file = io.open(filepath, "r")
+    if not file then return groups, group_order, key_order end
+
+    for line in file:lines() do
+        line = line:gsub("%s+$", "")
+        local group = line:match("^%[(.+)%]$")
+        if group then
+            current_group = group
+            groups[current_group] = {}
+            table.insert(group_order, current_group)
+            key_order[current_group] = {}
+        elseif current_group and line:match("=") then
+            local k, v = line:match("^([^=]+)=(.*)$")
+            if k and v then
+                k = k:gsub("^%s*(.-)%s*$", "%1")
+                v = v:gsub("^%s*(.-)%s*$", "%1")
+                groups[current_group][k] = v
+                table.insert(key_order[current_group], k)
+            end
+        end
+    end
+    file:close()
+    return groups, group_order, key_order
+end
+
+-- Handle GET requests for raw content
+if os.getenv("REQUEST_METHOD") == "GET" and os.getenv("QUERY_STRING") == "get_raw_content" then
+    io.write("Content-type: text/plain\r\n\r\n")
+    local content = read_file_content(DEFAULT_CONFIG_PATH)
+    if content then
+        io.write(content)
+    else
+        io.write("Error reading configuration file")
+    end
+    os.exit(0)
+end
+
+-- Handle POST requests for configuration updates
+if os.getenv("REQUEST_METHOD") == "POST" then
+    io.write("Content-type: text/html\r\n\r\n")
+    local post_data = io.read("*a")
+    if post_data then
+        local params = parse_qs(post_data)
+        local save_type = get_first(params, "save_type")
+        -- Handle raw edit save
+        if save_type == "raw" then
+            local raw_content = get_first(params, "raw_content")
+            if raw_content then
+                if write_file_content(DEFAULT_CONFIG_PATH, raw_content) then
+                    io.write("Configuration saved successfully")
+                    os.exit(0)
+                end
+            end
+            io.write("Error saving raw configuration")
+            os.exit(1)
+        end
+        
+        -- Fixed single parameter save
+        if save_type == "single" then
+            local group = get_first(params, "group")
+            local key = get_first(params, "key")
+            local value = get_first(params, "value")
+            if group and key and value then
+                write_ini(DEFAULT_CONFIG_PATH, group, key, value)
+            end
+        end
+        
+        -- Fixed group save
+        if save_type == "group" then
+            local group = get_first(params, "group")
+            if group then
+                local keys = params[group .. "_key"] or {}
+                local values = params[group .. "_value"] or {}
+                local count = math.min(#keys, #values)
+                for i = 1, count do
+                    if keys[i] ~= "" then
+                        write_ini(DEFAULT_CONFIG_PATH, group, keys[i], values[i])
+                    end
+                end
+            end
+        end
+        
+        -- Fixed full save
+        if save_type == "all" then
+            local groups = params["all_group"] or {}
+            local keys = params["all_key"] or {}
+            local values = params["all_value"] or {}
+            local count = math.min(#groups, #keys, #values)
+            for i = 1, count do
+                if groups[i] and keys[i] then
+                    write_ini(DEFAULT_CONFIG_PATH, groups[i], keys[i], values[i])
+                end
+            end
+        end
+    end
+    io.write("Configuration saved successfully")
+    os.exit(0)
+end
+
+-- Generate HTML configuration interface
+io.write("Content-type: text/html\r\n\r\n")
+io.write([[
+<!DOCTYPE html>
+<html>
+<head>
+<title>OpenWrt Configuration Manager</title>
+<meta charset="UTF-8">
+<style>
+body { font-family: Arial, sans-serif; margin: 20px; }
+fieldset { margin-bottom: 20px; border-radius: 5px; }
+legend { font-weight: bold; padding: 0 10px; }
+.config-item { margin: 10px 0; }
+.config-key { display: inline-block; width: 200px; }
+.config-value { width: 300px; padding: 5px; }
+.btn { padding: 5px 15px; cursor: pointer; }
+.btn-save { background-color: #4CAF50; color: white; border: none; }
+.btn-group { background-color: #2196F3; color: white; border: none; margin-left: 10px; }
+.btn-all { background-color: #f44336; color: white; border: none; padding: 10px 20px; font-size: 16px; margin-top: 20px; }
+.btn-raw { background-color: #9C27B0; color: white; border: none; padding: 5px 15px; margin-left: 10px; }
+#rawEditContainer { display: none; margin-top: 20px; }
+#rawContent { width: 100%; height: 400px; font-family: monospace; }
+</style>
+</head>
+<body>
+<h1>Device Configuration <button type="button" class="btn btn-raw" onclick="toggleRawEdit()">Raw Edit</button></h1>
+<div id="configFormContainer">
+<form id="configForm">
+]])
+
+-- Generate form fields while preserving INI order
+local config_data, group_order, key_order = parse_ini_ordered(DEFAULT_CONFIG_PATH)
+for _, group in ipairs(group_order) do
+    io.write(string.format('<fieldset><legend>%s <button type="button" class="btn btn-group" onclick="saveGroup(\'%s\')">Save Group</button></legend>\n', group, group))
+    for _, key in ipairs(key_order[group]) do
+        local value = config_data[group][key]
+        io.write(string.format([[
+        <div class="config-item">
+            <span class="config-key">%s:</span>
+            <input type="text" class="config-value" id="%s_%s" value="%s">
+            <button type="button" class="btn btn-save" onclick="saveItem('%s','%s')">Save</button>
+        </div>
+        ]], key, group, key, value:gsub('"', '&quot;'), group, key))
+    end
+    io.write('</fieldset>\n')
+end
+
+io.write([[
+<div style="text-align: center; margin-top: 30px;">
+    <button type="button" class="btn btn-all" onclick="saveAll()">Save All Configurations</button>
+</div>
+</form>
+</div>
+
+<div id="rawEditContainer">
+    <textarea id="rawContent" spellcheck="false"></textarea>
+    <div style="text-align: center; margin-top: 10px;">
+        <button type="button" class="btn btn-all" onclick="saveRaw()">Save Raw Configuration</button>
+    </div>
+</div>
+
+<script>
+// Load raw content when needed
+function loadRawContent() {
+    fetch('?get_raw_content')
+        .then(response => {
+            if(!response.ok) throw new Error('Failed to load content');
+            return response.text();
+        })
+        .then(text => {
+            document.getElementById('rawContent').value = text;
+        })
+        .catch(err => {
+            console.error('Error loading raw content:', err);
+            alert('Failed to load raw content');
+        });
+}
+
+function toggleRawEdit() {
+    var formContainer = document.getElementById('configFormContainer');
+    var rawContainer = document.getElementById('rawEditContainer');
+    var toggleBtn = document.querySelector('.btn-raw');
+    
+    if (formContainer.style.display === 'none') {
+        formContainer.style.display = 'block';
+        rawContainer.style.display = 'none';
+        toggleBtn.textContent = 'Raw Edit';
+    } else {
+        formContainer.style.display = 'none';
+        rawContainer.style.display = 'block';
+        toggleBtn.textContent = 'Form Edit';
+        loadRawContent();
+        toggleBtn.remove();
+    }
+}
+
+function saveRaw() {
+    if(!confirm('Are you sure you want to save the raw configuration?')) return;
+    
+    var formData = new FormData();
+    formData.append('save_type', 'raw');
+    formData.append('raw_content', document.getElementById('rawContent').value);
+    
+    fetch('', {
+        method: 'POST',
+        body: new URLSearchParams(formData)
+    }).then(response => {
+        if(!response.ok) throw new Error('Save failed');
+        return response.text();
+    }).then(text => {
+        if(text !== "Configuration saved successfully") throw new Error(text);
+        alert('Configuration saved');
+    }).catch(err => alert(err));
+}
+
+function saveItem(group, key) {
+    var value = document.getElementById(group+'_'+key).value;
+    var formData = new FormData();
+    formData.append('save_type', 'single');
+    formData.append('group', group);
+    formData.append('key', key);
+    formData.append('value', value);
+    
+    fetch('', {
+        method: 'POST',
+        body: new URLSearchParams(formData)
+    }).then(response => {
+        if(!response.ok) throw new Error('Save failed');
+        return response.text();
+    }).then(text => {
+        if(text !== "Configuration saved successfully") throw new Error(text);
+        alert('Configuration saved');
+    }).catch(err => alert(err));
+}
+
+function saveGroup(group) {
+    var formData = new FormData();
+    formData.append('save_type', 'group');
+    formData.append('group', group);
+    
+    document.querySelectorAll('input[id^="'+group+'"]').forEach(input => {
+        var key = input.id.split('_')[1];
+        formData.append(group+'_key', key);
+        formData.append(group+'_value', input.value);
+    });
+    
+    fetch('', {
+        method: 'POST',
+        body: new URLSearchParams(formData)
+    }).then(response => {
+        if(!response.ok) throw new Error('Save failed');
+        return response.text();
+    }).then(text => {
+        if(text !== "Configuration saved successfully") throw new Error(text);
+        alert('Group saved');
+    }).catch(err => alert(err));
+}
+
+function saveAll() {
+    if(!confirm('Are you sure you want to save ALL configurations?')) return;
+    
+    var formData = new FormData();
+    formData.append('save_type', 'all');
+    
+    document.querySelectorAll('input[class="config-value"]').forEach(input => {
+        var [group, key] = input.id.split('_');
+        if(input.value !== "") {
+            formData.append('all_group', group);
+            formData.append('all_key', key);
+            formData.append('all_value', input.value);
+        }
+    });
+    
+    fetch('', {
+        method: 'POST',
+        body: new URLSearchParams(formData)
+    }).then(response => {
+        if(!response.ok) throw new Error('Save failed');
+        return response.text();
+    }).then(text => {
+        if(text !== "Configuration saved successfully") throw new Error(text);
+        alert('All configurations saved');
+    }).catch(err => alert(err));
+}
+</script>
+</body>
+</html>
+]])

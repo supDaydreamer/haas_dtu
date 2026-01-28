@@ -8,6 +8,7 @@
 #include <sys/socket.h>
 
 #include "data.h"
+#include "haas_mqtt.h"
 #include "ini.h"
 #include "mbtcp_server.h"
 
@@ -220,6 +221,9 @@ static int handle_vision_write(modbus_t *ctx, const uint8_t *req, int req_len)
 		}
 		printf("[MBTCP-S] Vision write ok=%u\n", (unsigned int)ok_value);
 		vision_store_sample(length, width, ok_value);
+		if (wrote_ok) {
+			haas_mqtt_vision_upload(length, width, ok_value);
+		}
 	}
 
 	return send_write_response(ctx, req, start, count);
