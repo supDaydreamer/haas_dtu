@@ -1962,7 +1962,7 @@ void haas_data_detect(void)
 	// 由于UART读取在专门的线程中，这里演示如何处理接收到的数据
 	// 实际使用时，需要在on_uart_1_read回调中调用处理函数
 	
-	dbg_printf("[Modbus Monitor] Monitoring... Stored registers: %d\n", g_register_count);
+	//dbg_printf("[Modbus Monitor] Monitoring... Stored registers: %d\n", g_register_count);
 }
 
 //////////////////////////////////////////////////////////////

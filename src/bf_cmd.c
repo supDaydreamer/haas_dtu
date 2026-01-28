@@ -808,7 +808,7 @@ void *cmd_main(void *args)
 //		}
 		//data_send_test();
 		DATA_FUNCTION_INTERVAL_S = GetIniKeyInt("config", "upload_time", FILENAME);
-		printf("upload data interval:%d\r\n",DATA_FUNCTION_INTERVAL_S);
+		//printf("upload data interval:%d\r\n",DATA_FUNCTION_INTERVAL_S);
 		if (now_time - s_cmd_last_run_time >= DATA_FUNCTION_INTERVAL_S){
 			// haas_data_debug_print();
 		s_cmd_last_run_time = now_time;
