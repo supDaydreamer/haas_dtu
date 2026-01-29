@@ -613,11 +613,12 @@ void haas_mqtt_vision_upload(float length, float width, uint16_t ok)
 {
 	char s_data[256];
 	char s_topic_buf[MQTT_TOPIC_LEN_MAX] = {0};
+	unsigned long long total_count = (unsigned long long)vision_get_total_count();
 
 	snprintf(s_topic_buf, sizeof(s_topic_buf), "/%d/%s/property/post", product_ID, g_bf_code);
 	snprintf(s_data, sizeof(s_data),
-	         "{\r\n\t\"NUM\": 1,\r\n\t\"VL\": [%.6f],\r\n\t\"VW\": [%.6f],\r\n\t\"OK\": [%u]\r\n}",
-	         length, width, (unsigned int)ok);
+	         "{\r\n\t\"NUM\": %llu,\r\n\t\"VL\": [%.6f],\r\n\t\"VW\": [%.6f],\r\n\t\"OK\": [%u]\r\n}",
+	         total_count, length, width, (unsigned int)ok);
 
 	printf("vision_upload topic:%s\r\n", s_topic_buf);
 	printf("vision_upload message:%s\r\n", s_data);

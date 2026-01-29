@@ -338,6 +338,7 @@ bool vision_is_upload_pending(void);
 int vision_prepare_upload_snapshot(void);
 void vision_clear_upload_snapshot(void);
 int vision_get_upload_count(void);
+uint64_t vision_get_total_count(void);
 float vision_get_upload_length(int index);
 float vision_get_upload_width(int index);
 uint16_t vision_get_upload_ok(int index);

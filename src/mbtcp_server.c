@@ -252,6 +252,7 @@ void *mbtcp_server_main(void *args)
 		return NULL;
 	}
 
+	modbus_set_debug(ctx, 1);
 	modbus_set_slave(ctx, MODBUS_TCP_SLAVE);
 
 	mb_map = modbus_mapping_new(0, 0, MBTCP_SERVER_MAX_REGISTERS, 0);

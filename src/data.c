@@ -98,6 +98,7 @@ static VisionSampleBuffer g_vision_buf = {0};
 static VisionUploadSnapshot g_vision_upload = {0};
 static pthread_mutex_t g_vision_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_vision_upload_pending = 0;
+static uint64_t g_vision_total_count = 0;
 
 static void load_vision_upload_config(int *count_out, int *interval_out)
 {
@@ -165,6 +166,7 @@ void vision_store_sample(float length, float width, uint16_t ok)
 	g_vision_buf.widths[g_vision_buf.count] = width;
 	g_vision_buf.oks[g_vision_buf.count] = ok;
 	g_vision_buf.count++;
+	g_vision_total_count++;
 
 	if (g_vision_buf.count >= count_threshold) {
 		g_vision_upload_pending = 1;
@@ -236,6 +238,17 @@ void vision_clear_upload_snapshot(void)
 int vision_get_upload_count(void)
 {
 	return g_vision_upload.count;
+}
+
+uint64_t vision_get_total_count(void)
+{
+	uint64_t total = 0;
+
+	pthread_mutex_lock(&g_vision_lock);
+	total = g_vision_total_count;
+	pthread_mutex_unlock(&g_vision_lock);
+
+	return total;
 }
 
 float vision_get_upload_length(int index)
@@ -1489,6 +1502,17 @@ static void store_register_data(uint8_t slave_addr, uint16_t reg_addr, uint16_t 
 	bool aggregated = recalc_register_outputs(slot);
 	sync_register_to_rs485(map_index, slot, map, aggregated, value);
 
+	if (aggregated &&
+	    map->data_type == 5 && map->data_len == 2 &&
+	    strcmp(map->name, "dev12") == 0 &&
+	    slot->numeric_value == 0.0) {
+		pthread_mutex_lock(&g_vision_lock);
+		if (g_vision_total_count != 0) {
+			g_vision_total_count = 0;
+		}
+		pthread_mutex_unlock(&g_vision_lock);
+	}
+
 	if (map->data_type == 2) {
 		if (s_modbus_store_log) {
 			dbg_printf("[Modbus Store] %s ASCII=\"%s\" offset:%u cmd:0x%02X (slot %d)\n",
@@ -2413,9 +2437,9 @@ void http_data_get(void)
 
 void *data_main()
 {
-	time_t s_humi_last_save_time = 0;
+	//time_t s_humi_last_save_time = 0;
 	time_t s_mqtt_dataUpload_time = 0;
-	s_humi_last_save_time = time(NULL);
+	//s_humi_last_save_time = time(NULL);
 	s_mqtt_dataUpload_time = time(NULL);
 	//wait uart init end.
 	//device_self_test();
@@ -2426,12 +2450,12 @@ void *data_main()
 		    //  wifi_uart_service();
 		//      check_btn();
 #if 1	
-		if(http_req_f == 1)
-		{
+		//if(http_req_f == 1)
+		//{
 		  //char *res = get_http("MO251212001");
 		 // printf("%s\n", res);
-			http_data_get();
-		}
+		//	http_data_get();
+		//}
 		time_t now_time = time(NULL);
 
 		int upload_time = GetIniKeyInt("config", "upload_time", FILENAME);
@@ -2453,8 +2477,8 @@ void *data_main()
 	//		s_humi_last_save_time = now_time;
 	//	}
 #endif
-		haas_data_display_cmd();
-		sleep(2);
+		//haas_data_display_cmd();
+		//sleep(2);
 	}
 	return 0;
 }
