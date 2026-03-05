@@ -511,6 +511,12 @@ if (len >= 3) {
 		len += snprintf(s_data + len, sizeof(s_data) - len,
 		                ",\r\n\t\"LW\": \"%s\"", lw_buf);
 	}
+	if (WorkOrder.mes_mix_weight > 0.0 || WorkOrder.actual_mix_weight > 0.0) {
+		len += snprintf(s_data + len, sizeof(s_data) - len,
+		                ",\r\n\t\"LW_MES\": %.4f", WorkOrder.mes_mix_weight);
+		len += snprintf(s_data + len, sizeof(s_data) - len,
+		                ",\r\n\t\"LW_ACT\": %.4f", WorkOrder.actual_mix_weight);
+	}
 	if (WorkOrder.operator_id[0] != '\0') {
 		len += snprintf(s_data + len, sizeof(s_data) - len,
 		                ",\r\n\t\"Operator\": \"%s\"", WorkOrder.operator_id);

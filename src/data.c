@@ -53,6 +53,11 @@ static char s_mixing_task_no[32] = {0};
 
 // RS485 从站模拟配置
 #define SLAVE_SIM_ADDR_DEFAULT        0x04
+#define SLAVE_SIM_STREAM_BUF_SIZE     512
+#define SLAVE_SIM_STREAM_DIAG         0
+
+static uint8_t s_slave_sim_stream_buf[SLAVE_SIM_STREAM_BUF_SIZE];
+static size_t s_slave_sim_stream_len = 0;
 
 uint16_t measure_value = 0;
 uint16_t measure_value_last = 0;
@@ -125,6 +130,9 @@ static bool recalc_register_outputs(RegisterData *slot);
 static void sync_register_to_rs485(int index, RegisterData *slot, const RegisterMap *map,
                                    bool aggregated, uint16_t last_word);
 static void filter_value2_by_delta(uint8_t index, HAAS_DEV_RS485 *dev);
+static void handle_uart1_legacy_payload(uint8_t *data, size_t len);
+static void slave_sim_stream_drop_prefix(size_t count);
+static bool process_uart1_slave_sim_stream(uint8_t *data, size_t len);
 void haas_energy_type2_init(void)
 {
 	if (s_energy_type2_init_done) {
@@ -970,34 +978,199 @@ void on_uart_1_read(uint8_t *data, size_t len)
 	// RS485_type == 1 表示被动监测
 	extern uint8_t RS485_type;
 	if (RS485_type == 1) {
-			process_modbus_sniffer_data(data, len);
-}
+		process_modbus_sniffer_data(data, len);
+		return;
+	}
 
-	else
-	{
 	if (RS485_type == 3) {
-		if (modbus_slave_sim_handle(data, len)) {
+		/* 丢弃无业务意义的 0x02 从站 0x03 轮询帧，避免刷屏日志 */
+		if (len == 8 && data[0] == 0x02 && data[1] == 0x03 && check_modbus_crc(data, len)) {
+			return;
+		}
+
+		size_t stream_len_before = s_slave_sim_stream_len;
+		bool consumed = process_uart1_slave_sim_stream(data, len);
+#if SLAVE_SIM_STREAM_DIAG
+		dbg_printf("[RS485-SIM-STREAM] uart1 rx len=%u before=%u after=%u consumed=%d\n",
+		           (unsigned int)len,
+		           (unsigned int)stream_len_before,
+		           (unsigned int)s_slave_sim_stream_len,
+		           consumed ? 1 : 0);
+#endif
+		if (consumed) {
 			return;
 		}
 	}
+
+	handle_uart1_legacy_payload(data, len);
+}
+
+static void handle_uart1_legacy_payload(uint8_t *data, size_t len)
+{
 	uart_receive_buff_input(data, len);
 	printf("uart1 receive data:");
-	for(int i = 0;i<len;i++)
-	{
-		printf(" %02x",data[i]);
+	for (size_t i = 0; i < len; i++) {
+		printf(" %02x", data[i]);
 	}
 	printf("\r\n");
-	//printf("on_uart_1_read data ok!!!!!!!!!!!!!!!\r\n");
-	if((data[0] == 0x03) && (data[1] == 0x10))
-	{
-		if((len == 21)&&(http_req_f == 0))
-			haas_device_dataRead1(data);
-	}
-	else
-		haas_device_dataRead(data, len);
-	}
-	
 
+	if (len >= 2 && data[0] == 0x03 && data[1] == 0x10) {
+		if (len == 21 && http_req_f == 0) {
+			haas_device_dataRead1(data);
+		}
+		return;
+	}
+
+	haas_device_dataRead(data, len);
+}
+
+static void slave_sim_stream_drop_prefix(size_t count)
+{
+	if (count == 0) {
+		return;
+	}
+	if (count >= s_slave_sim_stream_len) {
+		s_slave_sim_stream_len = 0;
+		return;
+	}
+
+	memmove(s_slave_sim_stream_buf,
+	        s_slave_sim_stream_buf + count,
+	        s_slave_sim_stream_len - count);
+	s_slave_sim_stream_len -= count;
+}
+
+static bool process_uart1_slave_sim_stream(uint8_t *data, size_t len)
+{
+	size_t cursor = 0;
+	bool consumed = false;
+	size_t old_stream_len = s_slave_sim_stream_len;
+	bool waiting_more = false;
+
+	if (!data || len == 0) {
+		return false;
+	}
+
+	if (len >= sizeof(s_slave_sim_stream_buf)) {
+		memcpy(s_slave_sim_stream_buf,
+		       data + (len - sizeof(s_slave_sim_stream_buf)),
+		       sizeof(s_slave_sim_stream_buf));
+		s_slave_sim_stream_len = sizeof(s_slave_sim_stream_buf);
+	} else {
+		size_t free_space = sizeof(s_slave_sim_stream_buf) - s_slave_sim_stream_len;
+		if (len > free_space) {
+			slave_sim_stream_drop_prefix(len - free_space);
+		}
+		memcpy(s_slave_sim_stream_buf + s_slave_sim_stream_len, data, len);
+		s_slave_sim_stream_len += len;
+	}
+
+#if SLAVE_SIM_STREAM_DIAG
+	dbg_printf("[RS485-SIM-STREAM] append old=%u add=%u new=%u\n",
+	           (unsigned int)old_stream_len,
+	           (unsigned int)len,
+	           (unsigned int)s_slave_sim_stream_len);
+#endif
+
+	while (cursor + 1 < s_slave_sim_stream_len) {
+		uint8_t func = s_slave_sim_stream_buf[cursor + 1];
+		size_t remain = s_slave_sim_stream_len - cursor;
+		size_t frame_len = 0;
+		bool need_more = false;
+
+		if (func == 0x06) {
+			frame_len = 8;
+			if (remain < frame_len) {
+				need_more = true;
+			}
+		} else if (func == 0x10) {
+			if (remain < 7) {
+				need_more = true;
+			} else {
+				uint16_t reg_count = ((uint16_t)s_slave_sim_stream_buf[cursor + 4] << 8) |
+				                     s_slave_sim_stream_buf[cursor + 5];
+				uint8_t byte_count = s_slave_sim_stream_buf[cursor + 6];
+
+				if (reg_count == 0 || byte_count != (uint8_t)(reg_count * 2U)) {
+					cursor++;
+					continue;
+				}
+
+				frame_len = (size_t)9 + byte_count;
+				if (frame_len < 11 || frame_len > 256) {
+					cursor++;
+					continue;
+				}
+				if (remain < frame_len) {
+					need_more = true;
+				}
+			}
+		} else {
+			cursor++;
+			continue;
+		}
+
+		if (need_more) {
+#if SLAVE_SIM_STREAM_DIAG
+			dbg_printf("[RS485-SIM-STREAM] need_more cursor=%u func=0x%02X remain=%u frame_len=%u\n",
+			           (unsigned int)cursor,
+			           func,
+			           (unsigned int)remain,
+			           (unsigned int)frame_len);
+#endif
+			if (cursor > 0) {
+				slave_sim_stream_drop_prefix(cursor);
+			}
+			waiting_more = true;
+			cursor = 0;
+			break;
+		}
+
+		if (!check_modbus_crc(&s_slave_sim_stream_buf[cursor], frame_len)) {
+#if SLAVE_SIM_STREAM_DIAG
+			dbg_printf("[RS485-SIM-STREAM] crc_fail cursor=%u func=0x%02X frame_len=%u\n",
+			           (unsigned int)cursor,
+			           func,
+			           (unsigned int)frame_len);
+#endif
+			cursor++;
+			continue;
+		}
+
+		if (cursor > 0) {
+			slave_sim_stream_drop_prefix(cursor);
+		}
+
+#if SLAVE_SIM_STREAM_DIAG
+		dbg_printf("[RS485-SIM-STREAM] frame_ok func=0x%02X frame_len=%u stream_len=%u\n",
+		           s_slave_sim_stream_buf[1],
+		           (unsigned int)frame_len,
+		           (unsigned int)s_slave_sim_stream_len);
+#endif
+		if (!modbus_slave_sim_handle(s_slave_sim_stream_buf, frame_len)) {
+#if SLAVE_SIM_STREAM_DIAG
+			dbg_printf("[RS485-SIM-STREAM] fallback_legacy func=0x%02X frame_len=%u\n",
+			           s_slave_sim_stream_buf[1],
+			           (unsigned int)frame_len);
+#endif
+			handle_uart1_legacy_payload(s_slave_sim_stream_buf, frame_len);
+		}
+
+		slave_sim_stream_drop_prefix(frame_len);
+		consumed = true;
+		cursor = 0;
+	}
+
+	if (!waiting_more && cursor > 0 && cursor < s_slave_sim_stream_len) {
+#if SLAVE_SIM_STREAM_DIAG
+		dbg_printf("[RS485-SIM-STREAM] resync_drop=%u remain_before=%u\n",
+		           (unsigned int)cursor,
+		           (unsigned int)s_slave_sim_stream_len);
+#endif
+		slave_sim_stream_drop_prefix(cursor);
+	}
+
+	return consumed;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////
@@ -1623,6 +1796,8 @@ static void mixing_start_batch(const RegisterMap *map, const RegisterData *slot)
 	WorkOrder.unit[0] = '\0';
 	WorkOrder.quantity_double = 0.0;
 	WorkOrder.quantity = 0;
+	WorkOrder.mes_mix_weight = 0.0;
+	WorkOrder.actual_mix_weight = 0.0;
 	WorkOrder.Product_name[0] = '\0';
 	for (int i = 0; i < MIXING_MAX_MATERIALS; i++) {
 		WorkOrder.materials[i].name[0] = '\0';
@@ -1688,8 +1863,11 @@ static bool mixing_check_complete_and_match(void)
 		return false;
 	}
 
+	/* 记录 MES 与现场总量，上传时同时上报 */
 	expected_mix = (float)WorkOrder.quantity_double;
 	actual_mix = (float)mix_slot->numeric_value;
+	WorkOrder.mes_mix_weight = (double)expected_mix;
+	WorkOrder.actual_mix_weight = (double)actual_mix;
 
 	expected_count = WorkOrder.material_count;
 
@@ -1732,12 +1910,8 @@ static bool mixing_check_complete_and_match(void)
 		return false;
 	}
 	if (expected_mix != actual_mix) {
-		if (!s_mixing_compare_failed) {
-			printf("[Mixing] compare failed: mix_weight=%.6f mes=%.6f\n",
-			       actual_mix, expected_mix);
-			s_mixing_compare_failed = true;
-		}
-		return false;
+		printf("[Mixing] compare warn: mix_weight=%.6f mes=%.6f (upload allowed)\n",
+		       actual_mix, expected_mix);
 	}
 
 	s_mixing_compare_failed = false;
@@ -2520,6 +2694,8 @@ void http_data_get(void)
 	WorkOrder.operator_id[0] = '\0';
 	WorkOrder.unit[0] = '\0';
 	WorkOrder.quantity_double = 0.0;
+	WorkOrder.mes_mix_weight = 0.0;
+	WorkOrder.actual_mix_weight = 0.0;
 //	printf("%s\n", res);
 	cJSON *data_json = read_json_str(res);
 //	cJSON *data_json = cJSON_GetObjectItemCaseSensitive(res, "data");
@@ -2536,8 +2712,10 @@ void http_data_get(void)
 			total_quantity = quantity_json->valuedouble;
 			WorkOrder.quantity = (unsigned int)total_quantity;
 			WorkOrder.quantity_double = total_quantity;
+			WorkOrder.mes_mix_weight = total_quantity;
 		} else {
 			WorkOrder.quantity = 0;
+			WorkOrder.mes_mix_weight = 0.0;
 		}
 
 		if (name_json && cJSON_IsString(name_json)) {

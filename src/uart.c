@@ -2,6 +2,9 @@
 #define UART_RX_MAX_LEN				(1024)
 #define UART_TX_MAX_LEN				(1024)
 #define UART_MSG_BOX_DEEP			(64)
+#define UART1_RX_POLL_US			(10 * 1000)
+#define UART2_RX_POLL_US			(30 * 1000)
+#define UART_RX_POLL_DEFAULT_US		(20 * 1000)
 
 //#define UART_DEBUG_PRINT			(1)
 
@@ -145,7 +148,7 @@ void *uart_rx_task(void *args)
 	uint8_t in_buf[UART_RX_MAX_LEN] = {0};
 	char tty_dev_buf[32] = {0};
 	uint32_t uart_index = (uint32_t)args;
-	uint32_t usleep_time = 100 * 1000;
+	uint32_t usleep_time = UART_RX_POLL_DEFAULT_US;
 
 	snprintf(tty_dev_buf, sizeof(tty_dev_buf), "%s%u", TTY_DEV_PREFIX, uart_index);
 
@@ -167,10 +170,10 @@ void *uart_rx_task(void *args)
 	BFMSG_BOX_HANDLE box_handle = bfmsg_box_init(UART_MSG_BOX_DEEP);
 	if (uart_index == 1) {
 		g_uart1_rx_box_handle = box_handle;
-		usleep_time = 100 * 1000;
+		usleep_time = UART1_RX_POLL_US;
 	} else if (uart_index == 2) {
 		g_uart2_rx_box_handle = box_handle;
-		usleep_time = 200 * 1000;
+		usleep_time = UART2_RX_POLL_US;
 	}
 
 	while (1) {
@@ -248,4 +251,3 @@ void uart_tx(uint32_t uart_index, uint8_t *data, size_t len)
 	//close(s_fd[uart_index]);
 	//s_fd_inited_map &= (~(1 << uart_index));
 }
-

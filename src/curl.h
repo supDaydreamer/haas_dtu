@@ -8,6 +8,8 @@ typedef struct{
 	char Product_name[25];
 	unsigned int quantity;
 	double quantity_double;
+	double mes_mix_weight;
+	double actual_mix_weight;
 	char assign_name[32];
 	char operator_id[64];
 	char unit[12];
