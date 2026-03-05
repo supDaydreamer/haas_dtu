@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include "common.h"
 #include "data.h"
 #include "uart.h"
@@ -55,9 +56,11 @@ static char s_mixing_task_no[32] = {0};
 #define SLAVE_SIM_ADDR_DEFAULT        0x04
 #define SLAVE_SIM_STREAM_BUF_SIZE     512
 #define SLAVE_SIM_STREAM_DIAG         0
+#define SLAVE_SIM_STREAM_IDLE_FLUSH_MS 80
 
 static uint8_t s_slave_sim_stream_buf[SLAVE_SIM_STREAM_BUF_SIZE];
 static size_t s_slave_sim_stream_len = 0;
+static uint64_t s_slave_sim_last_rx_ms = 0;
 
 uint16_t measure_value = 0;
 uint16_t measure_value_last = 0;
@@ -132,6 +135,8 @@ static void sync_register_to_rs485(int index, RegisterData *slot, const Register
 static void filter_value2_by_delta(uint8_t index, HAAS_DEV_RS485 *dev);
 static void handle_uart1_legacy_payload(uint8_t *data, size_t len);
 static void slave_sim_stream_drop_prefix(size_t count);
+static uint64_t get_monotonic_ms(void);
+static int probe_modbus_frame_len(const uint8_t *data, size_t remain);
 static bool process_uart1_slave_sim_stream(uint8_t *data, size_t len);
 void haas_energy_type2_init(void)
 {
@@ -983,11 +988,6 @@ void on_uart_1_read(uint8_t *data, size_t len)
 	}
 
 	if (RS485_type == 3) {
-		/* 丢弃无业务意义的 0x02 从站 0x03 轮询帧，避免刷屏日志 */
-		if (len == 8 && data[0] == 0x02 && data[1] == 0x03 && check_modbus_crc(data, len)) {
-			return;
-		}
-
 		size_t stream_len_before = s_slave_sim_stream_len;
 		bool consumed = process_uart1_slave_sim_stream(data, len);
 #if SLAVE_SIM_STREAM_DIAG
@@ -1040,15 +1040,82 @@ static void slave_sim_stream_drop_prefix(size_t count)
 	s_slave_sim_stream_len -= count;
 }
 
+static uint64_t get_monotonic_ms(void)
+{
+	struct timeval tv;
+	if (gettimeofday(&tv, NULL) != 0) {
+		return 0;
+	}
+	return ((uint64_t)tv.tv_sec * 1000ULL) + ((uint64_t)tv.tv_usec / 1000ULL);
+}
+
+static int probe_modbus_frame_len(const uint8_t *data, size_t remain)
+{
+	uint8_t func = 0;
+
+	if (!data || remain < 2) {
+		return 0;
+	}
+
+	func = data[1];
+	switch (func) {
+	case 0x01:
+	case 0x02:
+	case 0x03:
+	case 0x04:
+	case 0x05:
+	case 0x06:
+		return (remain >= 8) ? 8 : 0;
+	case 0x0F:
+		if (remain < 7) {
+			return 0;
+		}
+		{
+			uint16_t reg_count = ((uint16_t)data[4] << 8) | data[5];
+			uint8_t byte_count = data[6];
+			size_t req_len = (size_t)9 + byte_count;
+			uint8_t expected = (uint8_t)((reg_count + 7U) / 8U);
+			if (reg_count > 0 && byte_count == expected && req_len >= 10 && req_len <= 256) {
+				return (remain >= req_len) ? (int)req_len : 0;
+			}
+		}
+		return (remain >= 8) ? 8 : 0;
+	case 0x10:
+		if (remain < 7) {
+			return 0;
+		}
+		{
+			uint16_t reg_count = ((uint16_t)data[4] << 8) | data[5];
+			uint8_t byte_count = data[6];
+			size_t req_len = (size_t)9 + byte_count;
+			if (reg_count > 0 && byte_count == (uint8_t)(reg_count * 2U) && req_len >= 11 && req_len <= 256) {
+				return (remain >= req_len) ? (int)req_len : 0;
+			}
+		}
+		return (remain >= 8) ? 8 : 0;
+	default:
+		return -1;
+	}
+}
+
 static bool process_uart1_slave_sim_stream(uint8_t *data, size_t len)
 {
 	size_t cursor = 0;
 	bool consumed = false;
 	size_t old_stream_len = s_slave_sim_stream_len;
-	bool waiting_more = false;
+	uint64_t now_ms = 0;
+	uint8_t target_addr = 0;
 
 	if (!data || len == 0) {
 		return false;
+	}
+
+	now_ms = get_monotonic_ms();
+	if (s_slave_sim_stream_len > 0 && s_slave_sim_last_rx_ms > 0 &&
+	    now_ms > s_slave_sim_last_rx_ms &&
+	    (now_ms - s_slave_sim_last_rx_ms) > SLAVE_SIM_STREAM_IDLE_FLUSH_MS) {
+		s_slave_sim_stream_len = 0;
+		old_stream_len = 0;
 	}
 
 	if (len >= sizeof(s_slave_sim_stream_buf)) {
@@ -1064,6 +1131,8 @@ static bool process_uart1_slave_sim_stream(uint8_t *data, size_t len)
 		memcpy(s_slave_sim_stream_buf + s_slave_sim_stream_len, data, len);
 		s_slave_sim_stream_len += len;
 	}
+	s_slave_sim_last_rx_ms = now_ms;
+	target_addr = resolve_slave_sim_addr();
 
 #if SLAVE_SIM_STREAM_DIAG
 	dbg_printf("[RS485-SIM-STREAM] append old=%u add=%u new=%u\n",
@@ -1073,64 +1142,34 @@ static bool process_uart1_slave_sim_stream(uint8_t *data, size_t len)
 #endif
 
 	while (cursor + 1 < s_slave_sim_stream_len) {
-		uint8_t func = s_slave_sim_stream_buf[cursor + 1];
 		size_t remain = s_slave_sim_stream_len - cursor;
+		int frame_len_probe = probe_modbus_frame_len(&s_slave_sim_stream_buf[cursor], remain);
 		size_t frame_len = 0;
-		bool need_more = false;
 
-		if (func == 0x06) {
-			frame_len = 8;
-			if (remain < frame_len) {
-				need_more = true;
-			}
-		} else if (func == 0x10) {
-			if (remain < 7) {
-				need_more = true;
-			} else {
-				uint16_t reg_count = ((uint16_t)s_slave_sim_stream_buf[cursor + 4] << 8) |
-				                     s_slave_sim_stream_buf[cursor + 5];
-				uint8_t byte_count = s_slave_sim_stream_buf[cursor + 6];
-
-				if (reg_count == 0 || byte_count != (uint8_t)(reg_count * 2U)) {
-					cursor++;
-					continue;
-				}
-
-				frame_len = (size_t)9 + byte_count;
-				if (frame_len < 11 || frame_len > 256) {
-					cursor++;
-					continue;
-				}
-				if (remain < frame_len) {
-					need_more = true;
-				}
-			}
-		} else {
+		if (frame_len_probe < 0) {
 			cursor++;
 			continue;
 		}
-
-		if (need_more) {
+		if (frame_len_probe == 0) {
 #if SLAVE_SIM_STREAM_DIAG
-			dbg_printf("[RS485-SIM-STREAM] need_more cursor=%u func=0x%02X remain=%u frame_len=%u\n",
+			dbg_printf("[RS485-SIM-STREAM] need_more cursor=%u func=0x%02X remain=%u\n",
 			           (unsigned int)cursor,
-			           func,
-			           (unsigned int)remain,
-			           (unsigned int)frame_len);
+			           s_slave_sim_stream_buf[cursor + 1],
+			           (unsigned int)remain);
 #endif
 			if (cursor > 0) {
 				slave_sim_stream_drop_prefix(cursor);
 			}
-			waiting_more = true;
 			cursor = 0;
 			break;
 		}
+		frame_len = (size_t)frame_len_probe;
 
 		if (!check_modbus_crc(&s_slave_sim_stream_buf[cursor], frame_len)) {
 #if SLAVE_SIM_STREAM_DIAG
 			dbg_printf("[RS485-SIM-STREAM] crc_fail cursor=%u func=0x%02X frame_len=%u\n",
 			           (unsigned int)cursor,
-			           func,
+			           s_slave_sim_stream_buf[cursor + 1],
 			           (unsigned int)frame_len);
 #endif
 			cursor++;
@@ -1139,6 +1178,14 @@ static bool process_uart1_slave_sim_stream(uint8_t *data, size_t len)
 
 		if (cursor > 0) {
 			slave_sim_stream_drop_prefix(cursor);
+		}
+
+		if (s_slave_sim_stream_buf[0] != target_addr ||
+		    (s_slave_sim_stream_buf[1] != 0x06 && s_slave_sim_stream_buf[1] != 0x10)) {
+			slave_sim_stream_drop_prefix(frame_len);
+			consumed = true;
+			cursor = 0;
+			continue;
 		}
 
 #if SLAVE_SIM_STREAM_DIAG
@@ -1161,13 +1208,16 @@ static bool process_uart1_slave_sim_stream(uint8_t *data, size_t len)
 		cursor = 0;
 	}
 
-	if (!waiting_more && cursor > 0 && cursor < s_slave_sim_stream_len) {
+	if (cursor > 0 && cursor < s_slave_sim_stream_len) {
 #if SLAVE_SIM_STREAM_DIAG
 		dbg_printf("[RS485-SIM-STREAM] resync_drop=%u remain_before=%u\n",
 		           (unsigned int)cursor,
 		           (unsigned int)s_slave_sim_stream_len);
 #endif
 		slave_sim_stream_drop_prefix(cursor);
+	}
+	if (s_slave_sim_stream_len == 0) {
+		s_slave_sim_last_rx_ms = 0;
 	}
 
 	return consumed;
