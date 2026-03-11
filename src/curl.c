@@ -18,7 +18,7 @@
 #define URL_BUF_SIZE  128
 
 #define DEFAULT_MBTCP_IP   "192.168.5.150"
-#define DEFAULT_MBTCP_PORT 1502
+#define DEFAULT_MBTCP_PORT 502
 
 //#define SERVER_IP "192.168.1.100"  // 服务器IP
 //#define SERVER_PORT 502            // Modbus TCP默认端口

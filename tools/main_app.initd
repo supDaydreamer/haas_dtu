@@ -1,0 +1,67 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=95
+STOP=10
+
+SERVICE_NAME="main_app"
+APP_BIN_MAIN="/root/main_app/build/main_app"
+APP_BIN_HAAS="/root/main_app/build/haas_dtu"
+LOG_FILE="/tmp/main_app.log"
+LOG_MAX_SIZE=1048576
+LOG_CHECK_INTERVAL=5
+
+find_app_bin() {
+    if [ -x "$APP_BIN_MAIN" ]; then
+        echo "$APP_BIN_MAIN"
+        return 0
+    fi
+
+    if [ -x "$APP_BIN_HAAS" ]; then
+        echo "$APP_BIN_HAAS"
+        return 0
+    fi
+
+    return 1
+}
+
+start_service() {
+    local app_bin
+
+    app_bin="$(find_app_bin)"
+    if [ -z "$app_bin" ]; then
+        echo "[$SERVICE_NAME] no executable found: $APP_BIN_MAIN or $APP_BIN_HAAS"
+        return 1
+    fi
+
+    mkdir -p /tmp
+    touch "$LOG_FILE"
+
+    procd_open_instance
+    procd_set_param command /bin/sh -c "
+        app_bin=\"$app_bin\"
+        log_file=\"$LOG_FILE\"
+        log_max_size=$LOG_MAX_SIZE
+        log_check_interval=$LOG_CHECK_INTERVAL
+
+        \"\$app_bin\" </dev/null >>\"\$log_file\" 2>&1 &
+        app_pid=\$!
+
+        while kill -0 \"\$app_pid\" 2>/dev/null; do
+            if [ -f \"\$log_file\" ]; then
+                log_size=\$(wc -c < \"\$log_file\" 2>/dev/null)
+                if [ -n \"\$log_size\" ] && [ \"\$log_size\" -gt \"\$log_max_size\" ]; then
+                    : > \"\$log_file\"
+                fi
+            fi
+            sleep \"\$log_check_interval\"
+        done
+
+        wait \"\$app_pid\"
+    "
+    procd_set_param respawn 3600 5 5
+    procd_set_param term_timeout 10
+    procd_close_instance
+
+    echo "[$SERVICE_NAME] started: $app_bin"
+}

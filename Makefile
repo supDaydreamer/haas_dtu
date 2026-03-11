@@ -56,7 +56,8 @@ APP_SOURCES := \
 	src/modbus.c \
 	src/modbus-tcp.c \
 	src/modbus-data.c \
-	src/curl.c
+	src/curl.c \
+	src/mbtcp_server.c
 
 CJSON_SOURCES := src/lib/cJSON.c
 

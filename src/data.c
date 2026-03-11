@@ -77,7 +77,8 @@ static bool check_modbus_crc(uint8_t *data, size_t len);
 static bool parse_modbus_request(uint8_t *data, size_t len, ModbusRequest *req);
 static void add_pending_request(ModbusRequest *req);
 static void cleanup_timeout_requests(void);
-static ModbusRequest* match_response_with_request(uint8_t slave_addr, uint8_t function_code);
+static ModbusRequest* match_response_with_request(uint8_t slave_addr, uint8_t function_code,
+                                                  uint16_t expected_count);
 static void store_register_data(uint8_t slave_addr, uint16_t reg_addr, uint16_t value, uint8_t cmd);
 static bool parse_modbus_response(uint8_t *data, size_t len);
 static void init_register_map(void);
@@ -896,26 +897,26 @@ void on_uart_1_read(uint8_t *data, size_t len)
 	// RS485_type == 1 表示被动监测
 	extern uint8_t RS485_type;
 	if (RS485_type == 1) {
-			process_modbus_sniffer_data(data, len);
-}
+		process_modbus_sniffer_data(data, len);
+	}
 
 	else
 	{
-	uart_receive_buff_input(data, len);
-	printf("uart1 receive data:");
-	for(int i = 0;i<len;i++)
-	{
-		printf(" %02x",data[i]);
-	}
-	printf("\r\n");
-	//printf("on_uart_1_read data ok!!!!!!!!!!!!!!!\r\n");
-	if((data[0] == 0x03) && (data[1] == 0x10))
-	{
-		if((len == 21)&&(http_req_f == 0))
-			haas_device_dataRead1(data);
-	}
-	else
-		haas_device_dataRead(data);
+		uart_receive_buff_input(data, len);
+		printf("uart1 receive data:");
+		for(int i = 0;i<len;i++)
+		{
+			printf(" %02x",data[i]);
+		}
+		printf("\r\n");
+		//printf("on_uart_1_read data ok!!!!!!!!!!!!!!!\r\n");
+		if((data[0] == 0x03) && (data[1] == 0x10))
+		{
+			if((len == 21)&&(http_req_f == 0))
+				haas_device_dataRead1(data);
+		}
+		else
+			haas_device_dataRead(data);
 	}
 	
 
@@ -1131,6 +1132,23 @@ static bool parse_modbus_request(uint8_t *data, size_t len, ModbusRequest *req)
  */
 static void add_pending_request(ModbusRequest *req)
 {
+	cleanup_timeout_requests();
+
+	// 同一请求键已存在时仅刷新时间，避免队列被重复请求撑满
+	for (int i = 0; i < MAX_PENDING_REQUESTS; i++) {
+		ModbusRequest *cur = &g_pending_requests[i];
+		if (!cur->is_valid) {
+			continue;
+		}
+		if (cur->slave_addr == req->slave_addr &&
+		    cur->function_code == req->function_code &&
+		    cur->start_reg == req->start_reg &&
+		    cur->reg_count == req->reg_count) {
+			cur->timestamp = req->timestamp;
+			return;
+		}
+	}
+
 	// 查找空闲位置
 	for (int i = 0; i < MAX_PENDING_REQUESTS; i++) {
 		if (!g_pending_requests[i].is_valid) {
@@ -1141,7 +1159,12 @@ static void add_pending_request(ModbusRequest *req)
 	}
 	
 	// 队列满，覆盖最旧的
-	dbg_printf("[Modbus Monitor] Request queue full, overwriting oldest\n");
+	static time_t s_last_queue_full_log = 0;
+	time_t now = time(NULL);
+	if (now - s_last_queue_full_log >= 10) {
+		dbg_printf("[Modbus Monitor] Request queue full, overwriting oldest\n");
+		s_last_queue_full_log = now;
+	}
 	memmove(&g_pending_requests[0], &g_pending_requests[1], 
 	        sizeof(ModbusRequest) * (MAX_PENDING_REQUESTS - 1));
 	memcpy(&g_pending_requests[MAX_PENDING_REQUESTS - 1], req, sizeof(ModbusRequest));
@@ -1166,16 +1189,26 @@ static void cleanup_timeout_requests(void)
 /**
  * @brief 匹配响应与请求
  */
-static ModbusRequest* match_response_with_request(uint8_t slave_addr, uint8_t function_code)
+static ModbusRequest* match_response_with_request(uint8_t slave_addr, uint8_t function_code,
+                                                  uint16_t expected_count)
 {
+	ModbusRequest *best = NULL;
 	for (int i = 0; i < MAX_PENDING_REQUESTS; i++) {
-		if (g_pending_requests[i].is_valid &&
-		    g_pending_requests[i].slave_addr == slave_addr &&
-		    g_pending_requests[i].function_code == function_code) {
-			return &g_pending_requests[i];
+		ModbusRequest *req = &g_pending_requests[i];
+		if (!req->is_valid) {
+			continue;
+		}
+		if (req->slave_addr != slave_addr || req->function_code != function_code) {
+			continue;
+		}
+		if (expected_count > 0 && req->reg_count != expected_count) {
+			continue;
+		}
+		if (!best || req->timestamp < best->timestamp) {
+			best = req;
 		}
 	}
-	return NULL;
+	return best;
 }
 
 /**
@@ -1443,8 +1476,9 @@ static bool parse_modbus_response(uint8_t *data, size_t len)
 		return false;
 	}
 	
-	// 匹配请求
-	ModbusRequest *req = match_response_with_request(slave_addr, function_code);
+	// 匹配请求（按从站、功能码、数量约束，优先最早请求）
+	uint16_t expected_count = (function_code == 0x03) ? (uint16_t)(byte_count / 2) : 0;
+	ModbusRequest *req = match_response_with_request(slave_addr, function_code, expected_count);
 	if (!req) {
 		dbg_printf("[Modbus Resp] No matching request for Addr:%02X\n", slave_addr);
 		return false;
